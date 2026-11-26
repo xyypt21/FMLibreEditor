@@ -172,14 +172,6 @@ impl App {
             ui.label("Cap end ratio (of PA)");
             ui.add(egui::DragValue::new(&mut self.settings.cap.end_ratio).speed(0.01).range(0.01..=1.0));
             ui.end_row();
-
-            ui.label("APA shortfall years");
-            ui.add(egui::DragValue::new(&mut self.settings.apa_shortfall_years).speed(0.1).range(0.1..=10.0));
-            ui.end_row();
-
-            ui.label("ACA growth years");
-            ui.add(egui::DragValue::new(&mut self.settings.aca_growth_years).speed(0.1).range(0.1..=10.0));
-            ui.end_row();
         });
 
         ui.add_space(8.0);

@@ -41,10 +41,6 @@ pub struct GrowthSettings {
     /// No growth at or above this age.
     pub max_age: f64,
     pub cap: CapRule,
-    /// Years of growth the projected ability (APA) may count on. Not used by the growth itself.
-    pub apa_shortfall_years: f64,
-    /// Years of growth the current projection (ACA) counts on. Not used by the growth itself.
-    pub aca_growth_years: f64,
 }
 
 impl Default for GrowthSettings {
@@ -53,8 +49,6 @@ impl Default for GrowthSettings {
             monthly_gain: 2,
             max_age: 23.0,
             cap: CapRule { start_age: 18.0, start_ratio: 0.6, end_age: 21.0, end_ratio: 0.9 },
-            apa_shortfall_years: 2.0,
-            aca_growth_years: 0.5,
         }
     }
 }
@@ -86,12 +80,6 @@ impl GrowthSettings {
             if !(ratio > 0.0 && ratio <= 1.0) {
                 return Err(format!("{name} must be in (0, 1]"));
             }
-        }
-        if !self.apa_shortfall_years.is_finite() || self.apa_shortfall_years <= 0.0 {
-            return Err("apa_shortfall_years must be a positive number".to_owned());
-        }
-        if !self.aca_growth_years.is_finite() || self.aca_growth_years <= 0.0 {
-            return Err("aca_growth_years must be a positive number".to_owned());
         }
         Ok(())
     }
@@ -426,8 +414,6 @@ mod tests {
             monthly_gain: 2,
             max_age: 23.0,
             cap: CapRule { start_age: 18.0, start_ratio: 0.6, end_age: 21.0, end_ratio: 0.9 },
-            apa_shortfall_years: 2.0,
-            aca_growth_years: 0.5,
         }
     }
 
