@@ -9,14 +9,19 @@
 //! the next merge of upstream is the usual one. It reads only the public API of `fmlibre-core`: the layout says where
 //! every field is, and [`Session::process`] reads and writes it. Planning walks the lists of the human managers' teams,
 //! not every player in the game.
+//!
+//! The human managers' clubs come from the training manager's list, which keeps one object per human manager and names
+//! his club, so neither the staff nor the club list is read. Where the layout or the manager is not there, the plan
+//! falls back to the human staff's contracts and reads the club list.
 
 use std::collections::{BTreeSet, HashMap};
 
 use chrono::{Months, NaiveDate};
-use fmlibre_core::{
-    ClubIndex, ClubSummary, FmDate, PlayerLayout, Session, is_name_like, read_fm_string, read_name_entry,
-};
+use fmlibre_core::{ClubIndex, FmDate, Manager, PlayerLayout, Session, is_name_like, read_fm_string, read_name_entry};
 use fmlibre_mem::{Process, is_user_pointer};
+
+/// Most human managers a save may list; beyond this the list is not one the editor understands.
+const MOST_MANAGERS: u64 = 64;
 
 /// Most teams a club may list; beyond this the list is not one the editor understands.
 const MOST_TEAMS: u64 = 16;
@@ -100,7 +105,7 @@ pub fn growth_cap(age: f64, pa: i16, cap: &CapRule) -> i32 {
         let span = cap.end_age - cap.start_age;
         cap.start_ratio + (cap.end_ratio - cap.start_ratio) * (age - cap.start_age) / span
     };
-    (f64::from(pa) * ratio).round_ties_even().clamp(0.0, f64::from(pa)) as i32
+    (f64::from(pa) * ratio).round().clamp(0.0, f64::from(pa)) as i32
 }
 
 /// His CA after a settlement, or `None` when he does not grow: at or past `max_age`, at his cap, or with abilities
@@ -155,33 +160,105 @@ struct PlayerRow {
     shift: u64,
 }
 
+/// A club a human manager runs: what the plan needs of it, and where its object is.
+pub struct ControlledClub {
+    pub uid: u32,
+    pub name: String,
+    pub address: u64,
+}
+
+/// The clubs the human managers run. Read from the training manager's list, one object per human manager, each naming
+/// his club, so neither the staff nor the club list is read; where the layout or the manager is not there, the human
+/// staff's contracts and the club list are read instead.
+pub fn controlled_clubs(session: &Session) -> Result<Vec<ControlledClub>, String> {
+    if let Some(clubs) = clubs_from_training_manager(session) {
+        return Ok(clubs);
+    }
+    let staff = session.staff().map_err(|error| error.to_string())?;
+    let clubs = ClubIndex::new(session.clubs().map_err(|error| error.to_string())?);
+    let mut uids: Vec<u32> =
+        staff.iter().filter(|member| member.is_human).filter_map(|member| member.club_uid).collect();
+    uids.sort_unstable();
+    uids.dedup();
+    Ok(uids
+        .into_iter()
+        .filter_map(|uid| clubs.get(uid))
+        .map(|club| ControlledClub { uid: club.uid, name: club.name.clone(), address: club.address })
+        .collect())
+}
+
+/// The clubs the training manager keeps an object for, one per human manager: it names his club at `familiarity.club`.
+/// `None` where the layout does not place it, the manager is not found, or no club checks out, so the caller reads the
+/// staff instead.
+fn clubs_from_training_manager(session: &Session) -> Option<Vec<ControlledClub>> {
+    let familiarity = session.layout.familiarity.as_ref()?;
+    let place = session.manager_place(Manager::Training)?;
+    let process = &session.process;
+    let root = process.read_u64(session.plugin.base + place.rva).ok()?;
+    if !is_user_pointer(root) {
+        return None;
+    }
+    let first = process.read_u64(root + familiarity.managers).ok()?;
+    let last = process.read_u64(root + familiarity.managers + 8).ok()?;
+    if !is_user_pointer(first) || last < first || last - first > 8 * MOST_MANAGERS {
+        return None;
+    }
+    let (c, t) = (&session.layout.club, &session.layout.team);
+    let mut clubs: Vec<ControlledClub> = Vec::new();
+    for at in (first..last).step_by(8) {
+        let Ok(keeper) = process.read_u64(at) else {
+            continue;
+        };
+        if !is_user_pointer(keeper) {
+            continue;
+        }
+        let Ok(address) = process.read_u64(keeper + familiarity.club) else {
+            continue;
+        };
+        let Some(club) = read_club(session, address) else {
+            continue;
+        };
+        if clubs.iter().any(|seen| seen.address == club.address) {
+            continue;
+        }
+        // A club lists teams of its own, and each points back at it: the same check the plan makes.
+        let own_team = pointers(process, address + c.teams, MOST_TEAMS)
+            .into_iter()
+            .any(|team| is_user_pointer(team) && process.read_u64(team + t.club).ok() == Some(address));
+        if own_team {
+            clubs.push(club);
+        }
+    }
+    (!clubs.is_empty()).then_some(clubs)
+}
+
+/// One club object's UID and name, where it looks like a club.
+fn read_club(session: &Session, address: u64) -> Option<ControlledClub> {
+    let process = &session.process;
+    let c = &session.layout.club;
+    let uid = process.read_u32(address + c.uid).ok().filter(|&uid| uid != 0)?;
+    let name = read_fm_string(process, process.read_u64(address + c.name).ok()?)?;
+    is_name_like(&name).then_some(ControlledClub { uid, name, address })
+}
+
 /// The plan for every human manager's club: each team's players, deduplicated by UID. Only reads memory.
 pub fn plan_growth(session: &Session, settings: &GrowthSettings) -> Result<GrowthPlan, String> {
     settings.validate()?;
 
     let date = session.game_date();
-    let staff = session.staff().map_err(|error| error.to_string())?;
-    let clubs = ClubIndex::new(session.clubs().map_err(|error| error.to_string())?);
-
-    let mut humans: Vec<u32> =
-        staff.iter().filter(|member| member.is_human).filter_map(|member| member.club_uid).collect();
-    humans.sort_unstable();
-    humans.dedup();
+    let clubs = controlled_clubs(session)?;
 
     let mut shifts = HashMap::new();
     let mut seen = BTreeSet::new();
     let mut changes = Vec::new();
-    for uid in humans {
-        let Some(club) = clubs.get(uid) else {
-            continue;
-        };
-        for team in team_objects(session, club) {
+    for club in &clubs {
+        for team in team_objects(session, club.address, club.uid) {
             let roster = team_players(session, team, &mut shifts);
             collect_players(&roster, date, settings, &mut seen, &mut changes);
         }
         // A club's B team is a club of its own, listed among its linked teams.
-        for linked in session.linked_teams(club, &clubs) {
-            let roster = team_players(session, linked.address, &mut shifts);
+        for team in linked_team_objects(session, club.address) {
+            let roster = team_players(session, team, &mut shifts);
             collect_players(&roster, date, settings, &mut seen, &mut changes);
         }
     }
@@ -264,19 +341,44 @@ pub fn settle(session: &Session, plan: &GrowthPlan) -> Result<(Vec<GrowthChange>
 
 /// The player objects of a club's teams, in the club's order. A club whose object or list is not what the layout says
 /// has no teams.
-fn team_objects(session: &Session, club: &ClubSummary) -> Vec<u64> {
+fn team_objects(session: &Session, address: u64, uid: u32) -> Vec<u64> {
     let process = &session.process;
     let (c, t) = (&session.layout.club, &session.layout.team);
-    if process.read_u32(club.address + c.uid).ok() != Some(club.uid) {
+    if process.read_u32(address + c.uid).ok() != Some(uid) {
         return Vec::new();
     }
-    let teams = pointers(process, club.address + c.teams, MOST_TEAMS);
+    let teams = pointers(process, address + c.teams, MOST_TEAMS);
     if teams.len() as u64 > MOST_TEAMS {
         return Vec::new();
     }
     teams
         .into_iter()
-        .filter(|&team| is_user_pointer(team) && process.read_u64(team + t.club).ok() == Some(club.address))
+        .filter(|&team| is_user_pointer(team) && process.read_u64(team + t.club).ok() == Some(address))
+        .collect()
+}
+
+/// The senior teams of other clubs that `club` runs (its B team), from its linked team list. A team is left out unless
+/// it belongs to another club and that club lists it among its own teams.
+fn linked_team_objects(session: &Session, club: u64) -> Vec<u64> {
+    let process = &session.process;
+    let (c, t) = (&session.layout.club, &session.layout.team);
+    let Some(offset) = c.linked_teams else {
+        return Vec::new();
+    };
+    pointers(process, club + offset, MOST_TEAMS)
+        .into_iter()
+        .filter(|&team| {
+            if !is_user_pointer(team) {
+                return false;
+            }
+            let Ok(owner) = process.read_u64(team + t.club) else {
+                return false;
+            };
+            is_user_pointer(owner)
+                && owner != club
+                && process.read_u32(owner + c.uid).is_ok_and(|uid| uid != 0)
+                && pointers(process, owner + c.teams, MOST_TEAMS).contains(&team)
+        })
         .collect()
 }
 
@@ -425,6 +527,13 @@ mod tests {
         assert_eq!(growth_cap(19.5, 200, &cap), 150); // halfway from 0.6 to 0.9
         assert_eq!(growth_cap(21.0, 200, &cap), 200); // end_ratio is not the ceiling from end_age on
         assert_eq!(growth_cap(30.0, 150, &cap), 150);
+    }
+
+    #[test]
+    fn cap_rounds_half_up() {
+        // 0.5 CA is not a real value, but the rounding rule is: up, not to even.
+        let cap = CapRule { start_age: 0.0, start_ratio: 0.5, end_age: 1.0, end_ratio: 0.5 };
+        assert_eq!(growth_cap(0.0, 1, &cap), 1);
     }
 
     #[test]

@@ -122,19 +122,11 @@ fn summarize(session: &Session) -> String {
         Some(loads) => format!("Saves loaded since the game started: {loads}"),
         None => "Saves loaded: not readable".to_owned(),
     });
-    let clubs = session.clubs().unwrap_or_default();
-    let name = |uid: u32| {
-        clubs.iter().find(|club| club.uid == uid).map_or_else(|| format!("#{uid}"), |club| club.name.clone())
-    };
-    match session.staff() {
-        Ok(staff) => {
-            let humans: Vec<String> =
-                staff.iter().filter(|member| member.is_human).filter_map(|member| member.club_uid).map(&name).collect();
-            if humans.is_empty() {
-                lines.push("Human manager clubs: none (is a save loaded?)".to_owned());
-            } else {
-                lines.push(format!("Human manager clubs: {}", humans.join(", ")));
-            }
+    match crate::growth::controlled_clubs(session) {
+        Ok(clubs) if clubs.is_empty() => lines.push("Human manager clubs: none (is a save loaded?)".to_owned()),
+        Ok(clubs) => {
+            let names: Vec<&str> = clubs.iter().map(|club| club.name.as_str()).collect();
+            lines.push(format!("Human manager clubs: {}", names.join(", ")));
         }
         Err(error) => lines.push(format!("Staff: {error}")),
     }
