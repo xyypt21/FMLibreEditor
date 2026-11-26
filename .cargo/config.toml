@@ -1,0 +1,5 @@
+[alias]
+# The standalone window: the small `gui` profile, and only two compilations at a time so a build leaves the machine
+# usable. Run `cargo gui -- --help` style arguments after the alias as usual.
+gui = "run --profile gui -p fm27-growth-gui -j 2"
+gui-build = "build --profile gui -p fm27-growth-gui -j 2"
