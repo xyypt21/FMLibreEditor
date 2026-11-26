@@ -27,13 +27,8 @@ opt-level = 3
 panic = "abort"
 strip = true
 
-# The standalone tools' window, built for size without the app release build's full LTO. A full build is quicker and
-# an incremental one much quicker; the exe is the same size as with thin LTO. Pair it with `-j 2` (see `cargo gui`) so
-# a rebuild does not take every core.
-[profile.gui]
-inherits = "release"
-opt-level = "s"
-lto = false
-codegen-units = 1
-panic = "abort"
-strip = true
+# Local debug builds: no debug information, which is most of the exe's and target's size. Incremental compilation stays
+# on, so a change recompiles only what it touches.
+[profile.dev]
+debug = 0
+incremental = true

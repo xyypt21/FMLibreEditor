@@ -6,11 +6,11 @@
 //! [`growth`], beside the window, so `fmlibre-core` stays as upstream has it:
 //!
 //! ```text
-//! cargo gui
+//! cargo run -p fm27-growth-gui
 //! ```
 //!
-//! `cargo gui` uses the workspace's `gui` profile (a stripped, size-oriented exe like release, without LTO) and builds
-//! two crates at a time, so it neither fills the disk with a debug exe nor uses every core.
+//! The workspace's `dev` profile leaves out debug information, so a local build is not the hundreds of megabytes a
+//! default debug build of eframe would be.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
