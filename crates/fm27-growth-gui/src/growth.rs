@@ -15,7 +15,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use chrono::{Months, NaiveDate};
+use chrono::NaiveDate;
 use fmlibre_core::{FmDate, Manager, PlayerLayout, Session, is_name_like, read_fm_string, read_name_entry};
 use fmlibre_mem::{Process, is_user_pointer};
 
@@ -126,8 +126,8 @@ pub fn growth_target(ca: u16, pa: i16, age: f64, settings: &GrowthSettings) -> O
 pub struct GrowthChange {
     pub uid: u32,
     pub name: String,
-    /// Age in years and tenths, from the in-game date; `None` when either date is unknown.
-    pub age: Option<f32>,
+    /// Age in whole years, from the in-game date; `None` when either date is unknown.
+    pub age: Option<u16>,
     pub ca: u16,
     pub new_ca: u16,
     pub pa: i16,
@@ -245,7 +245,7 @@ pub fn plan_growth(session: &Session, settings: &GrowthSettings) -> Result<Growt
         }
     }
 
-    changes.sort_by(|a, b| a.age.unwrap_or(f32::MAX).total_cmp(&b.age.unwrap_or(f32::MAX)));
+    changes.sort_by_key(|change| change.age.unwrap_or(u16::MAX));
     Ok(GrowthPlan { date, considered: seen.len(), changes })
 }
 
@@ -261,7 +261,7 @@ fn collect_players(
             continue;
         }
         let age = match (player.date_of_birth, date) {
-            (Some(birth), Some(today)) => age_tenths_on(birth, today),
+            (Some(birth), Some(today)) => age_on(birth, today),
             _ => None,
         };
         let Some(age) = age else {
@@ -468,21 +468,16 @@ fn name_score(process: &Process, p: &PlayerLayout, object: u64, shift: u64) -> u
         + named(read_name_entry(process, pointer_at(p.last_name)))
 }
 
-/// His age in years and tenths: the completed years, plus the days since his last birthday over 365.25, truncated to
-/// a tenth. `None` before the birth date, or for a birth date the game cannot hold.
-fn age_tenths_on(birth: FmDate, today: FmDate) -> Option<f32> {
+/// His age in whole years: the completed years, so he turns 26 on his birthday, not before. `None` before the birth
+/// date, or for a birth date the game cannot hold.
+fn age_on(birth: FmDate, today: FmDate) -> Option<u16> {
     if !(1901..2100).contains(&birth.year) {
         return None;
     }
     let birth = naive(birth)?;
     let today = naive(today)?;
-    // `years_since` is `None` before the birth date.
-    let whole = today.years_since(birth)?;
-    // A birthday on 29 February falls on the 28th in a year without one, as `Months` clamps to the month's last day.
-    let last_birthday = birth.checked_add_months(Months::new(whole * 12))?;
-    let since = (today - last_birthday).num_days();
-    let tenths = (f64::from(whole) + since as f64 / 365.25) * 10.0;
-    Some((tenths as i32) as f32 / 10.0)
+    // `years_since` is `None` before the birth date; a birthday on 29 February falls on the 28th in a year without one.
+    today.years_since(birth).map(|years| years as u16)
 }
 
 fn naive(date: FmDate) -> Option<NaiveDate> {
@@ -547,21 +542,19 @@ mod tests {
     }
 
     #[test]
-    fn age_carries_tenths_and_handles_leap_days() {
+    fn age_is_whole_years_and_handles_leap_days() {
         let today = FmDate { year: 2026, month: 7, day: 18 };
-        let age = |birth: FmDate| age_tenths_on(birth, today);
-        assert!((age(FmDate { year: 2000, month: 7, day: 21 }).unwrap() - 25.9).abs() < 0.05); // three days short of 26
-        assert!((age(FmDate { year: 2000, month: 7, day: 18 }).unwrap() - 26.0).abs() < 0.05);
+        let age = |birth: FmDate| age_on(birth, today);
+        assert_eq!(age(FmDate { year: 2000, month: 7, day: 21 }), Some(25)); // three days short of 26
+        assert_eq!(age(FmDate { year: 2000, month: 7, day: 18 }), Some(26));
         assert_eq!(age(FmDate { year: 2027, month: 1, day: 1 }), None);
 
         // A birthday on 29 February falls on the 28th in a common year.
         let leap = FmDate { year: 2000, month: 2, day: 29 };
-        let age = age_tenths_on(leap, FmDate { year: 2025, month: 2, day: 28 }).unwrap();
-        assert!((age - 24.9).abs() < 0.05, "{age}");
-        let age = age_tenths_on(leap, FmDate { year: 2025, month: 3, day: 1 }).unwrap();
-        assert!((age - 25.0).abs() < 0.05, "{age}");
+        assert_eq!(age_on(leap, FmDate { year: 2025, month: 2, day: 28 }), Some(24));
+        assert_eq!(age_on(leap, FmDate { year: 2025, month: 3, day: 1 }), Some(25));
 
         // A date the calendar does not have.
-        assert_eq!(age_tenths_on(FmDate { year: 2025, month: 2, day: 30 }, today), None);
+        assert_eq!(age_on(FmDate { year: 2025, month: 2, day: 30 }, today), None);
     }
 }
