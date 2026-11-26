@@ -154,11 +154,11 @@ impl App {
             ui.end_row();
 
             ui.label("Max age (no growth at or above)");
-            ui.add(egui::DragValue::new(&mut self.settings.max_age).speed(0.1).range(0.0..=60.0).max_decimals(1));
+            ui.add(egui::DragValue::new(&mut self.settings.max_age).speed(1.0).range(0..=60));
             ui.end_row();
 
             ui.label("Cap start age");
-            ui.add(egui::DragValue::new(&mut self.settings.cap.start_age).speed(0.1).range(0.0..=60.0).max_decimals(1));
+            ui.add(egui::DragValue::new(&mut self.settings.cap.start_age).speed(1.0).range(0..=60));
             ui.end_row();
 
             ui.label("Cap start ratio (of PA)");
@@ -168,7 +168,7 @@ impl App {
             ui.end_row();
 
             ui.label("Cap end age");
-            ui.add(egui::DragValue::new(&mut self.settings.cap.end_age).speed(0.1).range(0.0..=60.0).max_decimals(1));
+            ui.add(egui::DragValue::new(&mut self.settings.cap.end_age).speed(1.0).range(0..=60));
             ui.end_row();
 
             ui.label("Cap end ratio (of PA)");
@@ -221,7 +221,7 @@ impl App {
 
                 for change in &plan.changes {
                     ui.label(&change.name);
-                    ui.label(change.age.map_or_else(|| "-".to_owned(), |age| age.to_string()));
+                    ui.label(change.age.map_or_else(|| "-".to_owned(), |age| format!("{age:.1}")));
                     ui.label(change.ca.to_string());
                     ui.label(change.new_ca.to_string());
                     ui.label(change.pa.to_string());
