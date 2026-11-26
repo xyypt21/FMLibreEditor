@@ -1,6 +1,9 @@
 //! A standalone window for the FM27 CA growth: attach to the running game, preview the next monthly settlement and
 //! watch the in-game date.
 //!
+//! It connects and previews by itself, retrying while the game is not running. The watcher starts on request and then
+//! writes on each new in-game month.
+//!
 //! It borrows all of its game knowledge from `fmlibre-core` (build profiles, layouts, players, teams, dates), so it
 //! has no offsets of its own and builds without Tauri, the web front end or npm. The growth rules live in
 //! [`growth`], beside the window, so `fmlibre-core` stays as upstream has it:
@@ -41,13 +44,14 @@ struct App {
     commands: Sender<Command>,
     events: Receiver<Event>,
     settings: GrowthSettings,
+    sent_settings: GrowthSettings,
     connected: bool,
     running: bool,
-    busy: bool,
     summary: String,
     plan: Option<PlanView>,
     log: VecDeque<String>,
     error: Option<String>,
+    show_rules: bool,
 }
 
 impl App {
@@ -57,15 +61,16 @@ impl App {
             commands,
             events,
             settings: GrowthSettings::default(),
+            sent_settings: GrowthSettings::default(),
             connected: false,
             running: false,
-            busy: false,
-            summary: "Not connected.".to_owned(),
+            summary: "Waiting for the game…".to_owned(),
             plan: None,
             log: VecDeque::new(),
             error: None,
+            show_rules: false,
         };
-        app.push_log("Press Connect to attach to the running game.".to_owned());
+        app.push_log("Waiting for the game…".to_owned());
         app
     }
 
@@ -84,27 +89,24 @@ impl App {
         match event {
             Event::Log(line) => self.push_log(line),
             Event::Connected(Ok(summary)) => {
-                self.busy = false;
                 self.connected = true;
                 self.error = None;
                 self.summary = summary;
                 self.push_log("Connected.".to_owned());
             }
             Event::Connected(Err(error)) => {
-                self.busy = false;
                 self.connected = false;
                 self.running = false;
                 self.plan = None;
+                self.summary = "Waiting for the game…".to_owned();
                 self.push_log(format!("Connect failed: {error}"));
                 self.error = Some(error);
             }
             Event::Plan(Ok(plan)) => {
-                self.busy = false;
                 self.error = None;
                 self.plan = Some(plan);
             }
             Event::Plan(Err(error)) => {
-                self.busy = false;
                 self.push_log(format!("Plan failed: {error}"));
                 self.error = Some(error);
             }
@@ -114,27 +116,21 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.add_enabled(!self.busy, egui::Button::new("Connect")).clicked() {
-                self.busy = true;
-                self.send(Command::Connect);
-            }
-            if ui.add_enabled(self.connected && !self.busy, egui::Button::new("Preview next settlement")).clicked() {
-                self.busy = true;
-                self.send(Command::Preview(self.settings.clone()));
-            }
             if ui.add_enabled(self.connected && !self.running, egui::Button::new("Start watcher (writes CA)")).clicked()
             {
                 self.send(Command::Start(self.settings.clone()));
             }
-            if ui.add_enabled(self.running, egui::Button::new("Stop")).clicked() {
-                self.send(Command::Stop);
+            if ui.button("Growth rules").clicked() {
+                self.show_rules = true;
             }
             ui.separator();
             if self.running {
                 ui.colored_label(egui::Color32::from_rgb(0x1a, 0x7f, 0x37), "watching the in-game month");
-            }
-            if self.busy {
+            } else if self.connected {
+                ui.label("connected; preview refreshes automatically");
+            } else {
                 ui.spinner();
+                ui.label("looking for the game…");
             }
             if ui.button("Clear log").clicked() {
                 self.log.clear();
@@ -176,9 +172,11 @@ impl App {
 
         ui.add_space(8.0);
         ui.label(
-            egui::RichText::new("The watcher writes the planned CA on each new in-game month. Preview only reads.")
-                .small()
-                .weak(),
+            egui::RichText::new(
+                "The watcher writes the planned CA on each new in-game month. The preview refreshes by itself and only reads.",
+            )
+            .small()
+            .weak(),
         );
 
         ui.separator();
@@ -191,7 +189,7 @@ impl App {
     fn plan_panel(&mut self, ui: &mut egui::Ui) {
         let Some(plan) = &self.plan else {
             ui.centered_and_justified(|ui| {
-                ui.label("Connect, then press Preview next settlement.");
+                ui.label("Waiting for the game. The preview refreshes automatically.");
             });
             return;
         };
@@ -229,12 +227,65 @@ impl App {
             });
         });
     }
+
+    fn rules_body(&self, ui: &mut egui::Ui) {
+        let settings = &self.settings;
+        let cap = &settings.cap;
+        ui.label(
+            "Players of the human manager's clubs are checked automatically. The preview only reads; the watcher \
+             writes when the in-game month changes.",
+        );
+        ui.add_space(6.0);
+        ui.strong("One settlement");
+        ui.label(format!(
+            "Adds {} CA to each player who can grow, once per in-game month; not on start and not on a save load.",
+            settings.monthly_gain
+        ));
+        ui.add_space(6.0);
+        ui.strong("Age cap (share of PA)");
+        egui::Grid::new("rules_cap").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
+            ui.label(format!("Age {}.0 and below", cap.age1));
+            ui.label(format!("{:.0}% of PA", cap.ratio1 * 100.0));
+            ui.end_row();
+            ui.label(format!("Age {}.1 to {}.9", cap.age1, cap.age2.saturating_sub(1)));
+            ui.label(format!("{:.0}% of PA", cap.ratio2 * 100.0));
+            ui.end_row();
+            ui.label(format!("Age {}.0 and above", cap.age2));
+            ui.label("PA itself (100%)");
+            ui.end_row();
+        });
+        ui.label(
+            egui::RichText::new(format!(
+                "Only exactly {}.0 takes the first step: {}.1 is already in the second. The cap does not interpolate.",
+                cap.age1, cap.age1
+            ))
+            .small()
+            .weak(),
+        );
+        ui.add_space(6.0);
+        ui.strong("Other limits");
+        ui.label(format!("No growth at or above {} years old.", settings.max_age));
+        ui.label("CA and PA must be 1 to 200, and CA must not be above PA.");
+        ui.label("A player at his PA does not grow.");
+        ui.label("If CA + the monthly gain would pass the cap, that player is skipped; CA is not clamped.");
+        ui.add_space(6.0);
+        ui.strong("Editing");
+        ui.label(
+            "Settings apply to the next preview and the next settlement. The window connects and previews by itself.",
+        );
+    }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         while let Ok(event) = self.events.try_recv() {
             self.on_event(event);
+        }
+
+        // Settings edits reach the worker at once, so the automatic preview reflects them on its next pass.
+        if self.settings != self.sent_settings {
+            self.sent_settings = self.settings.clone();
+            self.send(Command::Settings(self.settings.clone()));
         }
 
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
@@ -252,9 +303,18 @@ impl eframe::App for App {
         egui::Panel::left("settings").resizable(true).default_size(330.0).show(ui, |ui| self.settings_panel(ui));
         egui::CentralPanel::default_margins().show(ui, |ui| self.plan_panel(ui));
 
-        // While the watcher runs (or a command is in flight), look for the worker's events even without input.
-        if self.connected || self.running || self.busy {
-            ui.ctx().request_repaint_after(Duration::from_millis(200));
+        if self.show_rules {
+            let mut open = self.show_rules;
+            egui::Window::new("Growth rules")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_width(470.0)
+                .show(ui.ctx(), |ui| self.rules_body(ui));
+            self.show_rules = open;
         }
+
+        // The worker's events are polled through a channel: keep looking even when there is no input.
+        ui.ctx().request_repaint_after(Duration::from_millis(200));
     }
 }

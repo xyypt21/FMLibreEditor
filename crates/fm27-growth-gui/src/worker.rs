@@ -1,10 +1,11 @@
 //! The thread that owns the game connection. The window sends [`Command`]s and reads [`Event`]s; no memory is read on
 //! the window's thread, so a slow read never freezes it.
 //!
-//! On each new in-game month the watcher plans the settlement, writes it and reports what it wrote.
+//! The worker connects on its own and retries until the game is running, previews the plan every couple of seconds,
+//! and, on each new in-game month, plans the settlement, writes it and reports what it wrote.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fmlibre_core::{ArraySource, FmDate, Session, find_game};
 use fmlibre_mem::Process;
@@ -14,11 +15,13 @@ use crate::growth::{GrowthChange, GrowthSettings, plan_growth, settle};
 /// How often the in-game date is checked while the watcher runs.
 pub const POLL: Duration = Duration::from_secs(2);
 
+/// How often the preview refreshes, and how long to wait before looking for the game again.
+const PREVIEW: Duration = Duration::from_secs(2);
+const RECONNECT: Duration = Duration::from_secs(3);
+
 pub enum Command {
-    Connect,
-    Preview(GrowthSettings),
+    Settings(GrowthSettings),
     Start(GrowthSettings),
-    Stop,
 }
 
 pub enum Event {
@@ -58,50 +61,80 @@ pub fn spawn() -> (Sender<Command>, Receiver<Event>) {
 fn run(commands: Receiver<Command>, events: Sender<Event>) {
     let mut session: Option<Session> = None;
     let mut watch: Option<Watch> = None;
+    let mut settings = GrowthSettings::default();
+    let mut next_connect = Instant::now();
+    let mut last_preview = Instant::now();
+    let mut last_connect_error: Option<String> = None;
+    let mut last_plan_error: Option<String> = None;
     loop {
-        // While the watcher runs, wake up every couple of seconds to look at the date; otherwise wait for a command.
-        let command = if watch.is_some() {
-            match commands.recv_timeout(POLL) {
-                Ok(command) => Some(command),
-                Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => break,
+        // Connect on the first pass and retry while the game is not running.
+        if session.is_none() && Instant::now() >= next_connect {
+            connect(&mut session, &events, &mut last_connect_error);
+            if session.is_some() {
+                preview(session.as_ref(), &settings, &events, &mut last_plan_error);
+                last_preview = Instant::now();
+            } else {
+                next_connect = Instant::now() + RECONNECT;
             }
-        } else {
-            match commands.recv() {
-                Ok(command) => Some(command),
-                Err(_) => break,
-            }
+        }
+
+        // Wake every few seconds even without a command, to preview and to poll the in-game date.
+        let command = match commands.recv_timeout(POLL) {
+            Ok(command) => Some(command),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => break,
         };
 
         if let Some(command) = command {
             match command {
-                Command::Connect => connect(&mut session, &events),
-                Command::Preview(settings) => preview(session.as_ref(), &settings, &events),
-                Command::Start(settings) => start(session.as_ref(), settings, &mut watch, &events),
-                Command::Stop => {
-                    if watch.take().is_some() {
-                        log(&events, "Stopped.");
-                        let _ = events.send(Event::Running(false));
+                Command::Settings(new) => {
+                    settings = new.clone();
+                    if let Some(watch) = watch.as_mut() {
+                        watch.settings = new;
                     }
+                    if session.is_some() {
+                        preview(session.as_ref(), &settings, &events, &mut last_plan_error);
+                        last_preview = Instant::now();
+                    }
+                }
+                Command::Start(new) => {
+                    settings = new.clone();
+                    start(session.as_ref(), new, &mut watch, &events);
                 }
             }
         }
-        if let Some(watch) = watch.as_mut() {
-            tick(session.as_ref(), watch, &events);
+
+        let settled = match watch.as_mut() {
+            Some(watch) => tick(session.as_ref(), watch, &events),
+            None => false,
+        };
+        if settled {
+            // Keep the settlement's "written" view on screen for one preview interval.
+            last_preview = Instant::now();
+        }
+
+        if session.is_some() && last_preview.elapsed() >= PREVIEW {
+            preview(session.as_ref(), &settings, &events, &mut last_plan_error);
+            last_preview = Instant::now();
         }
     }
 }
 
-fn connect(session: &mut Option<Session>, events: &Sender<Event>) {
+fn connect(session: &mut Option<Session>, events: &Sender<Event>, last_error: &mut Option<String>) {
     match open() {
         Ok(connected) => {
             let summary = summarize(&connected);
             *session = Some(connected);
+            *last_error = None;
             let _ = events.send(Event::Connected(Ok(summary)));
         }
         Err(error) => {
             *session = None;
-            let _ = events.send(Event::Connected(Err(error)));
+            // Retrying every few seconds must not flood the log with the same failure.
+            if last_error.as_deref() != Some(error.as_str()) {
+                let _ = events.send(Event::Connected(Err(error.clone())));
+            }
+            *last_error = Some(error);
         }
     }
 }
@@ -133,13 +166,18 @@ fn summarize(session: &Session) -> String {
     lines.join("\n")
 }
 
-fn preview(session: Option<&Session>, settings: &GrowthSettings, events: &Sender<Event>) {
+fn preview(
+    session: Option<&Session>,
+    settings: &GrowthSettings,
+    events: &Sender<Event>,
+    last_error: &mut Option<String>,
+) {
     let Some(session) = session else {
-        let _ = events.send(Event::Plan(Err("Connect to the game first.".to_owned())));
         return;
     };
     match plan_growth(session, settings) {
         Ok(plan) => {
+            *last_error = None;
             let _ = events.send(Event::Plan(Ok(PlanView {
                 date: plan.date.map(date_text),
                 considered: plan.considered,
@@ -148,7 +186,11 @@ fn preview(session: Option<&Session>, settings: &GrowthSettings, events: &Sender
             })));
         }
         Err(error) => {
-            let _ = events.send(Event::Plan(Err(error)));
+            // The preview repeats every couple of seconds: report a failure only when it changes.
+            if last_error.as_deref() != Some(error.as_str()) {
+                let _ = events.send(Event::Plan(Err(error.clone())));
+            }
+            *last_error = Some(error);
         }
     }
 }
@@ -175,9 +217,10 @@ fn start(session: Option<&Session>, settings: GrowthSettings, watch: &mut Option
     let _ = events.send(Event::Running(true));
 }
 
-fn tick(session: Option<&Session>, watch: &mut Watch, events: &Sender<Event>) {
+/// Checks the in-game date and, on a new month, settles the plan. Returns whether it settled.
+fn tick(session: Option<&Session>, watch: &mut Watch, events: &Sender<Event>) -> bool {
     let Some(session) = session else {
-        return;
+        return false;
     };
 
     // A load is recognised by the game's own counter; the date is not used, as normal play moves it too.
@@ -189,19 +232,23 @@ fn tick(session: Option<&Session>, watch: &mut Watch, events: &Sender<Event>) {
             watch.last_month = Some(GrowthSettings::month_key(date));
             log(events, &format!("Save loaded at {}; resetting state.", date_text(date)));
         }
-        return;
+        return false;
     }
 
     let Some(now) = session.game_date() else {
-        return;
+        return false;
     };
     let key = GrowthSettings::month_key(now);
     match watch.last_month {
-        None => watch.last_month = Some(key),
-        Some(last) if key == last => {}
+        None => {
+            watch.last_month = Some(key);
+            false
+        }
+        Some(last) if key == last => false,
         Some(last) if key < last => {
             watch.last_month = Some(key);
             log(events, &format!("Save loaded at {}; resetting state.", date_text(now)));
+            false
         }
         Some(_) => {
             match plan_growth(session, &watch.settings) {
@@ -241,6 +288,7 @@ fn tick(session: Option<&Session>, watch: &mut Watch, events: &Sender<Event>) {
                 Err(error) => log(events, &format!("Cannot plan growth ({error}); retrying.")),
             }
             watch.last_month = Some(key);
+            true
         }
     }
 }
