@@ -11,13 +11,12 @@
 //! not every player in the game.
 //!
 //! The human managers' clubs come from the training manager's list, which keeps one object per human manager and names
-//! his club, so neither the staff nor the club list is read. Where the layout or the manager is not there, the plan
-//! falls back to the human staff's contracts and reads the club list.
+//! his club, so neither the staff nor the club list is read.
 
 use std::collections::{BTreeSet, HashMap};
 
 use chrono::{Months, NaiveDate};
-use fmlibre_core::{ClubIndex, FmDate, Manager, PlayerLayout, Session, is_name_like, read_fm_string, read_name_entry};
+use fmlibre_core::{FmDate, Manager, PlayerLayout, Session, is_name_like, read_fm_string, read_name_entry};
 use fmlibre_mem::{Process, is_user_pointer};
 
 /// Most human managers a save may list; beyond this the list is not one the editor understands.
@@ -167,41 +166,21 @@ pub struct ControlledClub {
     pub address: u64,
 }
 
-/// The clubs the human managers run. Read from the training manager's list, one object per human manager, each naming
-/// his club, so neither the staff nor the club list is read; where the layout or the manager is not there, the human
-/// staff's contracts and the club list are read instead.
+/// The clubs the human managers run, from the training manager's list: one object per human manager, each naming his
+/// club at `familiarity.club`. The plan reads these clubs and their teams directly, so it never scans the staff or the
+/// club list.
 pub fn controlled_clubs(session: &Session) -> Result<Vec<ControlledClub>, String> {
-    if let Some(clubs) = clubs_from_training_manager(session) {
-        return Ok(clubs);
-    }
-    let staff = session.staff().map_err(|error| error.to_string())?;
-    let clubs = ClubIndex::new(session.clubs().map_err(|error| error.to_string())?);
-    let mut uids: Vec<u32> =
-        staff.iter().filter(|member| member.is_human).filter_map(|member| member.club_uid).collect();
-    uids.sort_unstable();
-    uids.dedup();
-    Ok(uids
-        .into_iter()
-        .filter_map(|uid| clubs.get(uid))
-        .map(|club| ControlledClub { uid: club.uid, name: club.name.clone(), address: club.address })
-        .collect())
-}
-
-/// The clubs the training manager keeps an object for, one per human manager: it names his club at `familiarity.club`.
-/// `None` where the layout does not place it, the manager is not found, or no club checks out, so the caller reads the
-/// staff instead.
-fn clubs_from_training_manager(session: &Session) -> Option<Vec<ControlledClub>> {
-    let familiarity = session.layout.familiarity.as_ref()?;
-    let place = session.manager_place(Manager::Training)?;
+    let familiarity = session.layout.familiarity.as_ref().ok_or("this build does not place the training manager")?;
+    let place = session.manager_place(Manager::Training).ok_or("the training manager was not found")?;
     let process = &session.process;
-    let root = process.read_u64(session.plugin.base + place.rva).ok()?;
+    let root = process.read_u64(session.plugin.base + place.rva).map_err(|error| error.to_string())?;
     if !is_user_pointer(root) {
-        return None;
+        return Err("the training manager's pointer is not one the editor understands".to_owned());
     }
-    let first = process.read_u64(root + familiarity.managers).ok()?;
-    let last = process.read_u64(root + familiarity.managers + 8).ok()?;
+    let first = process.read_u64(root + familiarity.managers).map_err(|error| error.to_string())?;
+    let last = process.read_u64(root + familiarity.managers + 8).map_err(|error| error.to_string())?;
     if !is_user_pointer(first) || last < first || last - first > 8 * MOST_MANAGERS {
-        return None;
+        return Err("the training manager's list of managers is not one the editor understands".to_owned());
     }
     let (c, t) = (&session.layout.club, &session.layout.team);
     let mut clubs: Vec<ControlledClub> = Vec::new();
@@ -229,7 +208,10 @@ fn clubs_from_training_manager(session: &Session) -> Option<Vec<ControlledClub>>
             clubs.push(club);
         }
     }
-    (!clubs.is_empty()).then_some(clubs)
+    if clubs.is_empty() && first != last {
+        return Err("the training manager's clubs are not ones the editor understands".to_owned());
+    }
+    Ok(clubs)
 }
 
 /// One club object's UID and name, where it looks like a club.

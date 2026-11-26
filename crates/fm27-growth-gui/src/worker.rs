@@ -128,7 +128,7 @@ fn summarize(session: &Session) -> String {
             let names: Vec<&str> = clubs.iter().map(|club| club.name.as_str()).collect();
             lines.push(format!("Human manager clubs: {}", names.join(", ")));
         }
-        Err(error) => lines.push(format!("Staff: {error}")),
+        Err(error) => lines.push(format!("Human manager clubs: {error}")),
     }
     lines.join("\n")
 }
