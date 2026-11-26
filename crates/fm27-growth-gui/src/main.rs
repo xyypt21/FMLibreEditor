@@ -1,8 +1,8 @@
 //! A standalone window for the FM27 CA growth: attach to the running game, preview the next monthly settlement and
 //! watch the in-game date.
 //!
-//! It connects and previews by itself, retrying while the game is not running. The watcher starts on request and then
-//! writes on each new in-game month.
+//! It connects and previews once by itself, retrying while the game is not running. The watcher starts on request and
+//! then writes on each new in-game month. Settings are saved when the window closes.
 //!
 //! It borrows all of its game knowledge from `fmlibre-core` (build profiles, layouts, players, teams, dates), so it
 //! has no offsets of its own and builds without Tauri, the web front end or npm. The growth rules live in
@@ -21,6 +21,7 @@ mod growth;
 mod worker;
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
@@ -37,14 +38,58 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default().with_inner_size([1060.0, 740.0]).with_min_inner_size([840.0, 560.0]),
         ..Default::default()
     };
-    eframe::run_native("FM27 CA Growth", options, Box::new(|_cc| Ok(Box::new(App::new()))))
+    eframe::run_native(
+        "FM27 CA Growth",
+        options,
+        Box::new(|cc| {
+            install_fonts(&cc.egui_ctx);
+            Ok(Box::new(App::new()))
+        }),
+    )
+}
+
+/// Where the settings file lives: under `%APPDATA%`, or beside the working directory without it.
+fn settings_path() -> PathBuf {
+    match std::env::var_os("APPDATA") {
+        Some(dir) => PathBuf::from(dir).join("fm27-growth").join("settings.json"),
+        None => PathBuf::from("fm27-growth-settings.json"),
+    }
+}
+
+fn load_settings() -> GrowthSettings {
+    std::fs::read_to_string(settings_path()).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+fn save_settings(settings: &GrowthSettings) {
+    let path = settings_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(text) = serde_json::to_string_pretty(settings) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// Adds a Windows CJK font as a fallback, so Chinese club and player names do not render as boxes.
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    for path in [r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\simsun.ttc"] {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        fonts.font_data.insert("cjk".to_owned(), egui::FontData::from_owned(bytes).into());
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push("cjk".to_owned());
+        }
+        break;
+    }
+    ctx.set_fonts(fonts);
 }
 
 struct App {
     commands: Sender<Command>,
     events: Receiver<Event>,
     settings: GrowthSettings,
-    sent_settings: GrowthSettings,
     connected: bool,
     running: bool,
     summary: String,
@@ -56,12 +101,12 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let (commands, events) = worker::spawn();
+        let settings = load_settings();
+        let (commands, events) = worker::spawn(settings.clone());
         let mut app = Self {
             commands,
             events,
-            settings: GrowthSettings::default(),
-            sent_settings: GrowthSettings::default(),
+            settings,
             connected: false,
             running: false,
             summary: "Waiting for the game…".to_owned(),
@@ -70,6 +115,7 @@ impl App {
             error: None,
             show_rules: false,
         };
+        app.push_log(format!("Settings: {}", settings_path().display()));
         app.push_log("Waiting for the game…".to_owned());
         app
     }
@@ -116,6 +162,9 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            if ui.add_enabled(self.connected, egui::Button::new("Preview next settlement")).clicked() {
+                self.send(Command::Preview(self.settings.clone()));
+            }
             if ui.add_enabled(self.connected && !self.running, egui::Button::new("Start watcher (writes CA)")).clicked()
             {
                 self.send(Command::Start(self.settings.clone()));
@@ -127,7 +176,7 @@ impl App {
             if self.running {
                 ui.colored_label(egui::Color32::from_rgb(0x1a, 0x7f, 0x37), "watching the in-game month");
             } else if self.connected {
-                ui.label("connected; preview refreshes automatically");
+                ui.label("connected; press Preview to refresh");
             } else {
                 ui.spinner();
                 ui.label("looking for the game…");
@@ -173,7 +222,7 @@ impl App {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(
-                "The watcher writes the planned CA on each new in-game month. The preview refreshes by itself and only reads.",
+                "The watcher writes the planned CA on each new in-game month. The preview runs once at startup and only reads.",
             )
             .small()
             .weak(),
@@ -189,7 +238,7 @@ impl App {
     fn plan_panel(&mut self, ui: &mut egui::Ui) {
         let Some(plan) = &self.plan else {
             ui.centered_and_justified(|ui| {
-                ui.label("Waiting for the game. The preview refreshes automatically.");
+                ui.label("Waiting for the game. The preview runs once the window connects.");
             });
             return;
         };
@@ -271,7 +320,7 @@ impl App {
         ui.add_space(6.0);
         ui.strong("Editing");
         ui.label(
-            "Settings apply to the next preview and the next settlement. The window connects and previews by itself.",
+            "Settings apply to the next preview and the next settlement. Settings are saved when the window closes.",
         );
     }
 }
@@ -280,12 +329,6 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         while let Ok(event) = self.events.try_recv() {
             self.on_event(event);
-        }
-
-        // Settings edits reach the worker at once, so the automatic preview reflects them on its next pass.
-        if self.settings != self.sent_settings {
-            self.sent_settings = self.settings.clone();
-            self.send(Command::Settings(self.settings.clone()));
         }
 
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
@@ -316,5 +359,9 @@ impl eframe::App for App {
 
         // The worker's events are polled through a channel: keep looking even when there is no input.
         ui.ctx().request_repaint_after(Duration::from_millis(200));
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        save_settings(&self.settings);
     }
 }

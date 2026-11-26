@@ -18,13 +18,15 @@ use std::collections::BTreeSet;
 use chrono::{Months, NaiveDate};
 use fmlibre_core::{ClubIdentity, FmDate, Manager, Session, TeamPlayer};
 use fmlibre_mem::is_user_pointer;
+use serde::{Deserialize, Serialize};
 
 /// Most human managers a save may list; beyond this the list is not one the editor understands.
 const MOST_MANAGERS: u64 = 64;
 
 /// The age cap in steps: `ratio1` of PA through `age1`, `ratio2` of PA before `age2`, PA itself from `age2` on. Only the
 /// exact age `age1` (and younger) takes `ratio1`; a tenth more takes `ratio2`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CapRule {
     pub age1: u16,
     pub ratio1: f64,
@@ -32,8 +34,15 @@ pub struct CapRule {
     pub ratio2: f64,
 }
 
+impl Default for CapRule {
+    fn default() -> Self {
+        Self { age1: 18, ratio1: 0.6, age2: 21, ratio2: 0.9 }
+    }
+}
+
 /// What a settlement does, and the cap it keeps to.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GrowthSettings {
     /// CA added each in-game month.
     pub monthly_gain: u16,
@@ -44,7 +53,7 @@ pub struct GrowthSettings {
 
 impl Default for GrowthSettings {
     fn default() -> Self {
-        Self { monthly_gain: 2, max_age: 23, cap: CapRule { age1: 18, ratio1: 0.6, age2: 21, ratio2: 0.9 } }
+        Self { monthly_gain: 2, max_age: 23, cap: CapRule::default() }
     }
 }
 
@@ -342,6 +351,18 @@ mod tests {
         let mut bad = settings();
         bad.cap.ratio1 = 0.0;
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn settings_survive_json_and_missing_fields_take_defaults() {
+        let settings = settings();
+        let text = serde_json::to_string(&settings).unwrap();
+        assert_eq!(serde_json::from_str::<GrowthSettings>(&text).unwrap(), settings);
+
+        let parsed: GrowthSettings = serde_json::from_str(r#"{"monthly_gain": 3}"#).unwrap();
+        assert_eq!(parsed.monthly_gain, 3);
+        assert_eq!(parsed.max_age, GrowthSettings::default().max_age);
+        assert_eq!(parsed.cap, CapRule::default());
     }
 
     #[test]

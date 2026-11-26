@@ -1,8 +1,8 @@
 //! The thread that owns the game connection. The window sends [`Command`]s and reads [`Event`]s; no memory is read on
 //! the window's thread, so a slow read never freezes it.
 //!
-//! The worker connects on its own and retries until the game is running, previews the plan every couple of seconds,
-//! and, on each new in-game month, plans the settlement, writes it and reports what it wrote.
+//! The worker connects on its own, retries until the game is running, previews once as soon as it connects, and, on
+//! each new in-game month, plans the settlement, writes it and reports what it wrote.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
@@ -15,12 +15,11 @@ use crate::growth::{GrowthChange, GrowthSettings, plan_growth, settle};
 /// How often the in-game date is checked while the watcher runs.
 pub const POLL: Duration = Duration::from_secs(2);
 
-/// How often the preview refreshes, and how long to wait before looking for the game again.
-const PREVIEW: Duration = Duration::from_secs(2);
+/// How long to wait before looking for the game again.
 const RECONNECT: Duration = Duration::from_secs(3);
 
 pub enum Command {
-    Settings(GrowthSettings),
+    Preview(GrowthSettings),
     Start(GrowthSettings),
 }
 
@@ -48,22 +47,20 @@ struct Watch {
 }
 
 /// Starts the worker thread and gives the window its ends of the two channels.
-pub fn spawn() -> (Sender<Command>, Receiver<Event>) {
+pub fn spawn(settings: GrowthSettings) -> (Sender<Command>, Receiver<Event>) {
     let (commands, inbox) = std::sync::mpsc::channel();
     let (events, outbox) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("fm27-growth".to_owned())
-        .spawn(move || run(inbox, events))
+        .spawn(move || run(inbox, events, settings))
         .expect("the worker thread starts");
     (commands, outbox)
 }
 
-fn run(commands: Receiver<Command>, events: Sender<Event>) {
+fn run(commands: Receiver<Command>, events: Sender<Event>, settings: GrowthSettings) {
     let mut session: Option<Session> = None;
     let mut watch: Option<Watch> = None;
-    let mut settings = GrowthSettings::default();
     let mut next_connect = Instant::now();
-    let mut last_preview = Instant::now();
     let mut last_connect_error: Option<String> = None;
     let mut last_plan_error: Option<String> = None;
     loop {
@@ -71,51 +68,36 @@ fn run(commands: Receiver<Command>, events: Sender<Event>) {
         if session.is_none() && Instant::now() >= next_connect {
             connect(&mut session, &events, &mut last_connect_error);
             if session.is_some() {
+                // The one automatic preview: at startup, once the game is found.
                 preview(session.as_ref(), &settings, &events, &mut last_plan_error);
-                last_preview = Instant::now();
             } else {
                 next_connect = Instant::now() + RECONNECT;
             }
         }
 
-        // Wake every few seconds even without a command, to preview and to poll the in-game date.
-        let command = match commands.recv_timeout(POLL) {
-            Ok(command) => Some(command),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => break,
+        // Wait for a command; wake up while disconnected or watching, to retry or to poll the date.
+        let command = if session.is_none() || watch.is_some() {
+            match commands.recv_timeout(POLL) {
+                Ok(command) => Some(command),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            match commands.recv() {
+                Ok(command) => Some(command),
+                Err(_) => break,
+            }
         };
 
         if let Some(command) = command {
             match command {
-                Command::Settings(new) => {
-                    settings = new.clone();
-                    if let Some(watch) = watch.as_mut() {
-                        watch.settings = new;
-                    }
-                    if session.is_some() {
-                        preview(session.as_ref(), &settings, &events, &mut last_plan_error);
-                        last_preview = Instant::now();
-                    }
-                }
-                Command::Start(new) => {
-                    settings = new.clone();
-                    start(session.as_ref(), new, &mut watch, &events);
-                }
+                Command::Preview(new) => preview(session.as_ref(), &new, &events, &mut last_plan_error),
+                Command::Start(new) => start(session.as_ref(), new, &mut watch, &events),
             }
         }
 
-        let settled = match watch.as_mut() {
-            Some(watch) => tick(session.as_ref(), watch, &events),
-            None => false,
-        };
-        if settled {
-            // Keep the settlement's "written" view on screen for one preview interval.
-            last_preview = Instant::now();
-        }
-
-        if session.is_some() && last_preview.elapsed() >= PREVIEW {
-            preview(session.as_ref(), &settings, &events, &mut last_plan_error);
-            last_preview = Instant::now();
+        if let Some(watch) = watch.as_mut() {
+            tick(session.as_ref(), watch, &events);
         }
     }
 }

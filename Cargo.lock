@@ -1437,6 +1437,8 @@ dependencies = [
  "eframe",
  "fmlibre-core",
  "fmlibre-mem",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
