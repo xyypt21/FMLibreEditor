@@ -2,9 +2,9 @@
 //!
 //! Each in-game month change adds [`GrowthSettings::monthly_gain`] CA to every player of every team the human
 //! managers run, as long as he is younger than [`GrowthSettings::max_age`] and the gain stays within his age cap. The
-//! cap is a share of PA in steps: [`CapRule::start_ratio`] through [`CapRule::start_age`], [`CapRule::end_ratio`] before
-//! [`CapRule::end_age`], and PA itself from there on. The rules follow the FM27 growth tool (`20261118-fm27-tool`),
-//! except that the cap no longer rises linearly between the two ages.
+//! cap is a share of PA in steps: [`CapRule::ratio1`] of PA through [`CapRule::age1`], [`CapRule::ratio2`] of PA before
+//! [`CapRule::age2`], and PA itself from there on. The rules follow the FM27 growth tool (`20261118-fm27-tool`), except
+//! that the cap no longer rises linearly between the two ages.
 //!
 //! This module lives beside the window rather than in `fmlibre-core`: the growth rules are the tool's, while the
 //! targeted roster reads it needs are `fmlibre-core`'s own (`Session::club_at`, `team_objects_at`,
@@ -22,14 +22,14 @@ use fmlibre_mem::is_user_pointer;
 /// Most human managers a save may list; beyond this the list is not one the editor understands.
 const MOST_MANAGERS: u64 = 64;
 
-/// The age cap in steps: `start_ratio` of PA through `start_age`, `end_ratio` of PA before `end_age`, PA itself from
-/// `end_age` on. Ages count whole years (a player of 18 years and 11 months is in the 18 band).
+/// The age cap in steps: `ratio1` of PA through `age1`, `ratio2` of PA before `age2`, PA itself from `age2` on. Only the
+/// exact age `age1` (and younger) takes `ratio1`; a tenth more takes `ratio2`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CapRule {
-    pub start_age: u16,
-    pub start_ratio: f64,
-    pub end_age: u16,
-    pub end_ratio: f64,
+    pub age1: u16,
+    pub ratio1: f64,
+    pub age2: u16,
+    pub ratio2: f64,
 }
 
 /// What a settlement does, and the cap it keeps to.
@@ -44,11 +44,7 @@ pub struct GrowthSettings {
 
 impl Default for GrowthSettings {
     fn default() -> Self {
-        Self {
-            monthly_gain: 2,
-            max_age: 23,
-            cap: CapRule { start_age: 18, start_ratio: 0.6, end_age: 21, end_ratio: 0.9 },
-        }
+        Self { monthly_gain: 2, max_age: 23, cap: CapRule { age1: 18, ratio1: 0.6, age2: 21, ratio2: 0.9 } }
     }
 }
 
@@ -59,10 +55,10 @@ impl GrowthSettings {
             return Err("monthly_gain must be a positive integer".to_owned());
         }
         let cap = &self.cap;
-        if cap.end_age <= cap.start_age {
-            return Err("cap must have start_age < end_age".to_owned());
+        if cap.age2 <= cap.age1 {
+            return Err("cap must have age1 < age2".to_owned());
         }
-        for (name, ratio) in [("cap.start_ratio", cap.start_ratio), ("cap.end_ratio", cap.end_ratio)] {
+        for (name, ratio) in [("cap.ratio1", cap.ratio1), ("cap.ratio2", cap.ratio2)] {
             if !ratio.is_finite() || !(ratio > 0.0 && ratio <= 1.0) {
                 return Err(format!("{name} must be in (0, 1]"));
             }
@@ -76,14 +72,12 @@ impl GrowthSettings {
     }
 }
 
-/// The CA ceiling for this age: `start_ratio` of PA through `start_age`, `end_ratio` until `end_age`, PA itself from
-/// `end_age` on. Whole years decide the band, so a player of 18 years and 11 months is still capped at 0.6 of PA.
+/// The CA ceiling for this age: `ratio1` of PA through `age1`, `ratio2` until `age2`, PA itself from `age2` on.
 pub fn growth_cap(age: f64, pa: i16, cap: &CapRule) -> i32 {
-    let age = age.floor();
-    let ratio = if age <= f64::from(cap.start_age) {
-        cap.start_ratio
-    } else if age < f64::from(cap.end_age) {
-        cap.end_ratio
+    let ratio = if age <= f64::from(cap.age1) {
+        cap.ratio1
+    } else if age < f64::from(cap.age2) {
+        cap.ratio2
     } else {
         1.0
     };
@@ -300,29 +294,25 @@ mod tests {
     use super::*;
 
     fn settings() -> GrowthSettings {
-        GrowthSettings {
-            monthly_gain: 2,
-            max_age: 23,
-            cap: CapRule { start_age: 18, start_ratio: 0.6, end_age: 21, end_ratio: 0.9 },
-        }
+        GrowthSettings { monthly_gain: 2, max_age: 23, cap: CapRule { age1: 18, ratio1: 0.6, age2: 21, ratio2: 0.9 } }
     }
 
     #[test]
-    fn cap_steps_by_whole_age() {
+    fn cap_steps_by_age() {
         let cap = settings().cap;
         assert_eq!(growth_cap(17.0, 200, &cap), 120); // 200 × 0.6
         assert_eq!(growth_cap(18.0, 200, &cap), 120);
-        assert_eq!(growth_cap(18.9, 200, &cap), 120); // still in the 18 band
-        assert_eq!(growth_cap(19.0, 200, &cap), 180); // 200 × 0.9, no interpolation
+        assert_eq!(growth_cap(18.1, 200, &cap), 180); // 200 × 0.9, no interpolation
+        assert_eq!(growth_cap(18.9, 200, &cap), 180);
         assert_eq!(growth_cap(20.9, 200, &cap), 180);
-        assert_eq!(growth_cap(21.0, 200, &cap), 200); // end_ratio is not the ceiling from end_age on
+        assert_eq!(growth_cap(21.0, 200, &cap), 200); // ratio2 is not the ceiling from age2 on
         assert_eq!(growth_cap(30.0, 150, &cap), 150);
     }
 
     #[test]
     fn cap_rounds_half_up() {
         // 0.5 CA is not a real value, but the rounding rule is: up, not to even.
-        let cap = CapRule { start_age: 0, start_ratio: 0.5, end_age: 1, end_ratio: 0.5 };
+        let cap = CapRule { age1: 0, ratio1: 0.5, age2: 1, ratio2: 0.5 };
         assert_eq!(growth_cap(0.0, 1, &cap), 1);
     }
 
@@ -347,10 +337,10 @@ mod tests {
         bad.monthly_gain = 0;
         assert!(bad.validate().is_err());
         let mut bad = settings();
-        bad.cap.end_age = bad.cap.start_age;
+        bad.cap.age2 = bad.cap.age1;
         assert!(bad.validate().is_err());
         let mut bad = settings();
-        bad.cap.start_ratio = 0.0;
+        bad.cap.ratio1 = 0.0;
         assert!(bad.validate().is_err());
     }
 

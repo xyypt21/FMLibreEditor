@@ -157,22 +157,20 @@ impl App {
             ui.add(egui::DragValue::new(&mut self.settings.max_age).speed(1.0).range(0..=60));
             ui.end_row();
 
-            ui.label("Cap start age");
-            ui.add(egui::DragValue::new(&mut self.settings.cap.start_age).speed(1.0).range(0..=60));
+            ui.label("Age 1 (ratio 1 through this age)");
+            ui.add(egui::DragValue::new(&mut self.settings.cap.age1).speed(1.0).range(0..=60));
             ui.end_row();
 
-            ui.label("Cap start ratio (of PA)");
-            ui.add(
-                egui::DragValue::new(&mut self.settings.cap.start_ratio).speed(0.1).range(0.01..=1.0).max_decimals(1),
-            );
+            ui.label("Ratio 1 (of PA)");
+            ui.add(egui::DragValue::new(&mut self.settings.cap.ratio1).speed(0.1).range(0.01..=1.0).max_decimals(1));
             ui.end_row();
 
-            ui.label("Cap end age");
-            ui.add(egui::DragValue::new(&mut self.settings.cap.end_age).speed(1.0).range(0..=60));
+            ui.label("Age 2 (PA from this age)");
+            ui.add(egui::DragValue::new(&mut self.settings.cap.age2).speed(1.0).range(0..=60));
             ui.end_row();
 
-            ui.label("Cap end ratio (of PA)");
-            ui.add(egui::DragValue::new(&mut self.settings.cap.end_ratio).speed(0.1).range(0.01..=1.0).max_decimals(1));
+            ui.label("Ratio 2 (of PA before age 2)");
+            ui.add(egui::DragValue::new(&mut self.settings.cap.ratio2).speed(0.1).range(0.01..=1.0).max_decimals(1));
             ui.end_row();
         });
 
