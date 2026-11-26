@@ -67,8 +67,8 @@ pub use clauses::{
     release_clause_expiry, release_clause_never_expires,
 };
 pub use clubs::{
-    ClubDetails, ClubIndex, ClubSummary, Finances, League, SUPPORTER_MIX, SUPPORTER_TRAITS, leagues, read_club_details,
-    read_clubs,
+    ClubDetails, ClubIdentity, ClubIndex, ClubSummary, Finances, League, SUPPORTER_MIX, SUPPORTER_TRAITS, leagues,
+    read_club_details, read_clubs,
 };
 pub use coded::Coded;
 pub use cohesion::{COHESION_RANGE, CohesionPlan, CohesionSet};
@@ -134,7 +134,7 @@ pub use scouting::{
 pub use session::{ArraySource, IGNORE_PROFILES, SaveVouched, Session, SessionError, find_game, profiles_ignored};
 pub use signing::NewContract;
 pub use sponsorship::{Sponsorship, SponsorshipReadError, SponsorshipUnavailable, kind_name as sponsorship_kind_name};
-pub use squad::{CaptainPlan, CaptainRole, CaptainSet, ClubTeam, LinkedTeam, Loan, SquadMember};
+pub use squad::{CaptainPlan, CaptainRole, CaptainSet, ClubTeam, LinkedTeam, Loan, SquadMember, TeamPlayer};
 pub use squad_report::{Departure, DepartureAction, DepartureReason, DepthLine, DepthPlayer, DepthStatus, SquadReport};
 pub use stadium_name::{StadiumName, StadiumRename};
 pub use staff::{

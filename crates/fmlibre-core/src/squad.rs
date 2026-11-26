@@ -10,13 +10,17 @@
 //! Nürnberg II), whose senior team the parent club names in a second list, its linked teams.
 //! The squad screen shows those beside the club's own (see [`Session::linked_teams`]).
 
+use std::collections::HashMap;
+
 use fmlibre_mem::is_user_pointer;
 use serde::{Deserialize, Serialize};
 
 use crate::clubs::{ClubIndex, ClubSummary};
+use crate::date::FmDate;
 use crate::players::{PlayerIndex, PlayerSummary};
 use crate::profile::TeamLayout;
 use crate::session::Session;
+use crate::text::{display_name, read_fm_string, read_name_entry};
 use crate::transfer::{MoveError, Patch, Patches, PointerList};
 
 /// The most teams of one club the editor reads; clubs have a handful.
@@ -40,6 +44,23 @@ pub struct ClubTeam {
     pub captain: Option<u32>,
     pub vice_captain: Option<u32>,
     pub players: Vec<SquadMember>,
+}
+
+/// A player read from one team's list, without the game's player array: the fields a targeted reader needs, and where
+/// his object is, so a later write need not read the list again.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamPlayer {
+    pub uid: u32,
+    pub name: String,
+    pub date_of_birth: Option<FmDate>,
+    pub current_ability: u16,
+    pub potential_ability: i16,
+    #[serde(skip)]
+    pub address: u64,
+    /// How far this object's person block is shifted (see [`crate::PlayerLayout::person_block_shifts`]).
+    #[serde(skip)]
+    pub shift: u64,
 }
 
 /// A team of another club that a club runs beside its own: its B team, which is a club to the game.
@@ -186,6 +207,106 @@ impl Session {
         linked
     }
 
+    /// The teams of the club at `club` whose UID is `uid`, each pointing back at it. Read without the club array, so a
+    /// reader that found a club by a pointer can list its teams. A club whose object or list is not what the layout says
+    /// has no teams.
+    pub fn team_objects_at(&self, club: u64, uid: u32) -> Result<Vec<u64>, MoveError> {
+        let (c, t) = (&self.layout.club, &self.layout.team);
+        let not_a_club = || MoveError::NotAClub { uid };
+        if !is_user_pointer(club) || self.process.read_u32(club + c.uid)? != uid {
+            return Err(not_a_club());
+        }
+        let Some(list) = PointerList::read(&self.process, club + c.teams)? else {
+            return Ok(Vec::new());
+        };
+        if list.len() > MOST_TEAMS {
+            return Err(not_a_club());
+        }
+        let teams = list.elements(&self.process)?;
+        for &team in &teams {
+            if !is_user_pointer(team) || self.process.read_u64(team + t.club)? != club {
+                return Err(not_a_club());
+            }
+        }
+        Ok(teams)
+    }
+
+    /// The senior teams of other clubs that the club at `club` runs (its B team), as team addresses. Read without the
+    /// club array: a team is kept only where it belongs to another club, that club has a UID, and lists it among its own
+    /// teams.
+    pub fn linked_team_addresses(&self, club: u64) -> Vec<u64> {
+        let (c, t) = (&self.layout.club, &self.layout.team);
+        let Some(offset) = c.linked_teams else {
+            return Vec::new();
+        };
+        let Ok(Some(list)) = PointerList::read(&self.process, club + offset) else {
+            return Vec::new();
+        };
+        if list.len() > MOST_TEAMS {
+            return Vec::new();
+        }
+        let Ok(entries) = list.elements(&self.process) else {
+            return Vec::new();
+        };
+        entries
+            .into_iter()
+            .filter(|&team| {
+                if !is_user_pointer(team) {
+                    return false;
+                }
+                let Ok(owner) = self.process.read_u64(team + t.club) else {
+                    return false;
+                };
+                is_user_pointer(owner)
+                    && owner != club
+                    && self.process.read_u32(owner + c.uid).is_ok_and(|uid| uid != 0)
+                    && PointerList::read(&self.process, owner + c.teams).ok().flatten().is_some_and(|own| {
+                        own.len() <= MOST_TEAMS && own.elements(&self.process).is_ok_and(|teams| teams.contains(&team))
+                    })
+            })
+            .collect()
+    }
+
+    /// The players a team lists, read from their objects without the game's player array: UID, name, birth date and
+    /// abilities. A pointer that is not a player, or an object whose UID is unset, is left out.
+    pub fn team_players(&self, team: u64) -> Result<Vec<TeamPlayer>, MoveError> {
+        let Some(list) = PointerList::read(&self.process, team + self.layout.team.players)? else {
+            return Ok(Vec::new());
+        };
+        let objects = list.elements(&self.process)?;
+        let mut shifts: HashMap<u64, u64> = HashMap::new();
+        Ok(objects.into_iter().filter_map(|object| self.team_player(object, &mut shifts)).collect())
+    }
+
+    fn team_player(&self, object: u64, shifts: &mut HashMap<u64, u64>) -> Option<TeamPlayer> {
+        if !is_user_pointer(object) {
+            return None;
+        }
+        let (p, process) = (&self.layout.player, &self.process);
+        let class = process.read_u64(object).ok()?;
+        let shift = *shifts.entry(class).or_insert_with(|| crate::players::person_shift(process, p, object));
+        let at = |offset: u64| object + p.at(offset, shift);
+        let uid = process.read_u32(at(p.uid)).ok().filter(|&uid| uid != 0)?;
+        let u16_at =
+            |offset: u64| process.read_bytes(at(offset), 2).ok().map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
+        let u64_at = |offset: u64| process.read_u64(at(offset)).unwrap_or(0);
+        let full_name = read_fm_string(process, u64_at(p.full_name));
+        let (common, first, last) = (
+            read_name_entry(process, u64_at(p.common_name)),
+            read_name_entry(process, u64_at(p.first_name)),
+            read_name_entry(process, u64_at(p.last_name)),
+        );
+        Some(TeamPlayer {
+            uid,
+            name: display_name(common, first, last, full_name.as_ref(), uid),
+            date_of_birth: FmDate::from_raw(u16_at(p.date_of_birth)?, u16_at(p.date_of_birth + 2)?),
+            current_ability: u16_at(p.current_ability)?,
+            potential_ability: u16_at(p.potential_ability)? as i16,
+            address: object,
+            shift,
+        })
+    }
+
     /// Whether the club at `club` lists the team at `team` among its linked teams, as it lists its B team's.
     fn links_team(&self, club: u64, team: u64) -> bool {
         let Some(offset) = self.layout.club.linked_teams else {
@@ -265,24 +386,7 @@ impl Session {
 
     /// The teams of `club`, each pointing back at it.
     pub(crate) fn team_objects(&self, club: &ClubSummary) -> Result<Vec<u64>, MoveError> {
-        let (c, t) = (&self.layout.club, &self.layout.team);
-        let not_a_club = || MoveError::NotAClub { uid: club.uid };
-        if self.process.read_u32(club.address + c.uid)? != club.uid {
-            return Err(not_a_club());
-        }
-        let Some(list) = PointerList::read(&self.process, club.address + c.teams)? else {
-            return Ok(Vec::new());
-        };
-        if list.len() > MOST_TEAMS {
-            return Err(not_a_club());
-        }
-        let teams = list.elements(&self.process)?;
-        for &team in &teams {
-            if !is_user_pointer(team) || self.process.read_u64(team + t.club)? != club.address {
-                return Err(not_a_club());
-            }
-        }
-        Ok(teams)
+        self.team_objects_at(club.address, club.uid)
     }
 
     pub(crate) fn team_object(&self, club: &ClubSummary, index: usize) -> Result<u64, MoveError> {

@@ -6,7 +6,8 @@ use serde::Serialize;
 use crate::calibrate::ArrayRef;
 use crate::index::{Listed, SearchIndex};
 use crate::profile::{ClubFinanceLayout, Layout, StadiumLayout};
-use crate::text::{fold, read_fm_string};
+use crate::session::Session;
+use crate::text::{fold, is_name_like, read_fm_string};
 
 /// Supporter-mix percentages in the order FM stores them, as the game's Supporter Profile names them.
 pub const SUPPORTER_MIX: [&str; 6] = ["hardcore", "core", "family", "fair_weather", "corporate", "casual"];
@@ -62,6 +63,30 @@ impl Listed for ClubSummary {
 }
 
 pub type ClubIndex = SearchIndex<ClubSummary>;
+
+/// A club as one object names it, read at an address without the club array: its UID, name and where it is. For
+/// readers that find a club by a pointer, such as the human manager's club in the training manager.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClubIdentity {
+    pub uid: u32,
+    pub name: String,
+    #[serde(skip)]
+    pub address: u64,
+}
+
+impl Session {
+    /// The club at `address`, read without the club array. `None` where the object is not a club.
+    pub fn club_at(&self, address: u64) -> Option<ClubIdentity> {
+        let c = &self.layout.club;
+        if !is_user_pointer(address) {
+            return None;
+        }
+        let uid = self.process.read_u32(address + c.uid).ok().filter(|&uid| uid != 0)?;
+        let name = read_fm_string(&self.process, self.process.read_u64(address + c.name).ok()?)?;
+        is_name_like(&name).then_some(ClubIdentity { uid, name, address })
+    }
+}
 
 /// Reads every club. Entries without a name (a few special records share the array)
 /// are skipped. Only reads memory.
