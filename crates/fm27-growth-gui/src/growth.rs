@@ -2,8 +2,9 @@
 //!
 //! Each in-game month change adds [`GrowthSettings::monthly_gain`] CA to every player of every team the human
 //! managers run, as long as he is younger than [`GrowthSettings::max_age`] and the gain stays within his age cap. The
-//! rules are the ones of the FM27 growth tool (`20261118-fm27-tool`): the cap is a share of PA that grows with age,
-//! reaching PA itself at `cap.end_age`.
+//! cap is a share of PA in steps: [`CapRule::start_ratio`] through [`CapRule::start_age`], [`CapRule::end_ratio`] before
+//! [`CapRule::end_age`], and PA itself from there on. The rules follow the FM27 growth tool (`20261118-fm27-tool`),
+//! except that the cap no longer rises linearly between the two ages.
 //!
 //! This module lives beside the window rather than in `fmlibre-core`: the growth rules are the tool's, while the
 //! targeted roster reads it needs are `fmlibre-core`'s own (`Session::club_at`, `team_objects_at`,
@@ -21,7 +22,8 @@ use fmlibre_mem::is_user_pointer;
 /// Most human managers a save may list; beyond this the list is not one the editor understands.
 const MOST_MANAGERS: u64 = 64;
 
-/// The linear age cap: a share of PA from `start_age` to `end_age`, PA itself from `end_age` on.
+/// The age cap in steps: `start_ratio` of PA through `start_age`, `end_ratio` of PA before `end_age`, PA itself from
+/// `end_age` on. Ages count whole years (a player of 18 years and 11 months is in the 18 band).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CapRule {
     pub start_age: u16,
@@ -74,16 +76,16 @@ impl GrowthSettings {
     }
 }
 
-/// The CA ceiling for this age: a share of PA up to `end_age`, PA itself from there on.
+/// The CA ceiling for this age: `start_ratio` of PA through `start_age`, `end_ratio` until `end_age`, PA itself from
+/// `end_age` on. Whole years decide the band, so a player of 18 years and 11 months is still capped at 0.6 of PA.
 pub fn growth_cap(age: f64, pa: i16, cap: &CapRule) -> i32 {
-    let (start_age, end_age) = (f64::from(cap.start_age), f64::from(cap.end_age));
-    let ratio = if age <= start_age {
+    let age = age.floor();
+    let ratio = if age <= f64::from(cap.start_age) {
         cap.start_ratio
-    } else if age >= end_age {
-        1.0
+    } else if age < f64::from(cap.end_age) {
+        cap.end_ratio
     } else {
-        let span = end_age - start_age;
-        cap.start_ratio + (cap.end_ratio - cap.start_ratio) * (age - start_age) / span
+        1.0
     };
     (f64::from(pa) * ratio).round().clamp(0.0, f64::from(pa)) as i32
 }
@@ -306,11 +308,13 @@ mod tests {
     }
 
     #[test]
-    fn cap_follows_age() {
+    fn cap_steps_by_whole_age() {
         let cap = settings().cap;
         assert_eq!(growth_cap(17.0, 200, &cap), 120); // 200 × 0.6
         assert_eq!(growth_cap(18.0, 200, &cap), 120);
-        assert_eq!(growth_cap(19.5, 200, &cap), 150); // halfway from 0.6 to 0.9
+        assert_eq!(growth_cap(18.9, 200, &cap), 120); // still in the 18 band
+        assert_eq!(growth_cap(19.0, 200, &cap), 180); // 200 × 0.9, no interpolation
+        assert_eq!(growth_cap(20.9, 200, &cap), 180);
         assert_eq!(growth_cap(21.0, 200, &cap), 200); // end_ratio is not the ceiling from end_age on
         assert_eq!(growth_cap(30.0, 150, &cap), 150);
     }
