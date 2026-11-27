@@ -71,7 +71,6 @@ struct App {
     sent_settings: GrowthSettings,
     connected: bool,
     running: bool,
-    stopped: bool,
     plan: Option<PlanView>,
     log: VecDeque<String>,
     error: Option<String>,
@@ -89,7 +88,6 @@ impl App {
             sent_settings: GrowthSettings::default(),
             connected: false,
             running: false,
-            stopped: false,
             plan: None,
             log: VecDeque::new(),
             error: None,
@@ -139,11 +137,6 @@ impl App {
                 self.error = Some(error);
             }
             Event::Running(running) => self.running = running,
-            Event::Stopped(message) => {
-                self.running = false;
-                self.stopped = true;
-                self.error = Some(message);
-            }
         }
     }
 
@@ -155,15 +148,8 @@ impl App {
             if ui.button("Growth rules").clicked() {
                 self.show_rules = true;
             }
-            if self.stopped && ui.button("Resume watching").clicked() {
-                self.stopped = false;
-                self.error = None;
-                self.send(Command::Resume);
-            }
             ui.separator();
-            if self.stopped {
-                ui.colored_label(egui::Color32::from_rgb(0xb0, 0x00, 0x20), "watcher stopped");
-            } else if self.running {
+            if self.running {
                 ui.colored_label(egui::Color32::from_rgb(0x1a, 0x7f, 0x37), "watching the in-game month");
             } else if self.connected {
                 ui.label("connected; waiting for a save to watch");
@@ -301,10 +287,10 @@ impl App {
         ui.label("CA and PA must be 1 to 200, and CA must not be above PA.");
         ui.label("A player at his PA does not grow.");
         ui.label("If CA + the monthly gain would pass the cap, that player is skipped; CA is not clamped.");
-        ui.strong("Backward dates");
+        ui.strong("Save loads");
         ui.label(
-            "If the in-game date moves backwards without a save load, nothing is written, the error is logged, and the \
-             watcher stops. Resume watching starts it again from the date it finds.",
+            "Only the game's save-load counter resets the watch. A backward in-game date without a save load writes \
+             nothing and is ignored.",
         );
         ui.add_space(6.0);
         ui.strong("Editing");

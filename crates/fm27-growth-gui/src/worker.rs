@@ -21,8 +21,6 @@ const RECONNECT: Duration = Duration::from_secs(3);
 pub enum Command {
     Preview(GrowthSettings),
     Settings(GrowthSettings),
-    /// Start watching again after a backward in-game date stopped the watcher.
-    Resume,
 }
 
 pub enum Event {
@@ -30,8 +28,6 @@ pub enum Event {
     Connected(Result<String, String>),
     Plan(Result<PlanView, String>),
     Running(bool),
-    /// The watcher stopped itself, with the reason to show above the tables.
-    Stopped(String),
 }
 
 /// What the window shows of one plan.
@@ -64,7 +60,6 @@ pub fn spawn(settings: GrowthSettings) -> (Sender<Command>, Receiver<Event>) {
 fn run(commands: Receiver<Command>, events: Sender<Event>, mut settings: GrowthSettings) {
     let mut session: Option<Session> = None;
     let mut watch: Option<Watch> = None;
-    let mut stopped = false;
     let mut next_connect = Instant::now();
     let mut last_connect_error: Option<String> = None;
     let mut last_plan_error: Option<String> = None;
@@ -81,9 +76,8 @@ fn run(commands: Receiver<Command>, events: Sender<Event>, mut settings: GrowthS
             }
         }
 
-        // Start watching by itself as soon as a save can be watched; retry while the game is at its menus. A watcher
-        // stopped by a backward in-game date stays stopped until the window asks for it again.
-        if session.is_some() && watch.is_none() && !stopped {
+        // Start watching by itself as soon as a save can be watched; retry while the game is at its menus.
+        if session.is_some() && watch.is_none() {
             match start(session.as_ref(), settings.clone(), &mut watch) {
                 Ok(date) => {
                     last_start_error = None;
@@ -118,20 +112,10 @@ fn run(commands: Receiver<Command>, events: Sender<Event>, mut settings: GrowthS
                         watch.settings = new;
                     }
                 }
-                Command::Resume => {
-                    if stopped {
-                        stopped = false;
-                        watch = None;
-                        last_start_error = None;
-                        log(&events, "Watching again; the next new in-game month will write CA.");
-                    }
-                }
             }
         }
 
-        if tick(session.as_ref(), &mut watch, &events) {
-            stopped = true;
-        }
+        tick(session.as_ref(), &mut watch, &events);
     }
 }
 
@@ -222,7 +206,7 @@ fn start(session: Option<&Session>, settings: GrowthSettings, watch: &mut Option
 /// What one poll does, decided from plain values so that it can be tested without a game.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
-    /// Nothing to do: the month is unchanged, or the date cannot be read yet.
+    /// Nothing to do: the month is unchanged or earlier, or the date cannot be read yet.
     Idle,
     /// The first month read: remember it, but do not write.
     Remember,
@@ -230,12 +214,10 @@ enum Step {
     Reset,
     /// The in-game month moved forward: plan, write and remember the new month.
     Settle,
-    /// The in-game month moved back without a save load: report it and stop the watcher.
-    Backward,
 }
 
-/// The poll's decision. A load is recognised only by the game's own counter; a month that moves back without one is
-/// not a load but a date the editor must not act on.
+/// The poll's decision. A load is recognised only by the game's own counter; a month that moves back without one
+/// writes nothing and is simply ignored.
 fn decide(loads: (Option<u64>, Option<u64>), last_month: Option<i32>, key: Option<i32>) -> Step {
     if let (Some(then), Some(now)) = loads
         && now != then
@@ -244,31 +226,27 @@ fn decide(loads: (Option<u64>, Option<u64>), last_month: Option<i32>, key: Optio
     }
     match (last_month, key) {
         (None, Some(_)) => Step::Remember,
-        (Some(last), Some(key)) if key == last => Step::Idle,
-        (Some(last), Some(key)) if key < last => Step::Backward,
-        (Some(_), Some(_)) => Step::Settle,
-        (_, None) => Step::Idle,
+        (Some(last), Some(key)) if key > last => Step::Settle,
+        _ => Step::Idle,
     }
 }
 
-/// Checks the in-game date and, on a new month, settles the plan. Returns whether the watcher must stop; it does when
-/// the date moves backwards without a save load.
-fn tick(session: Option<&Session>, watch: &mut Option<Watch>, events: &Sender<Event>) -> bool {
+/// Checks the in-game date and, on a new month, settles the plan.
+fn tick(session: Option<&Session>, watch: &mut Option<Watch>, events: &Sender<Event>) {
     let Some(session) = session else {
-        return false;
+        return;
     };
     let Some(state) = watch.as_mut() else {
-        return false;
+        return;
     };
 
     let now_loads = session.loads();
     let date = session.game_date();
     let key = date.map(month_key);
     match decide((state.loads, now_loads), state.last_month, key) {
-        Step::Idle => false,
+        Step::Idle => {}
         Step::Remember => {
             state.last_month = key;
-            false
         }
         Step::Reset => {
             state.loads = now_loads;
@@ -276,25 +254,13 @@ fn tick(session: Option<&Session>, watch: &mut Option<Watch>, events: &Sender<Ev
                 state.last_month = Some(key);
                 log(events, &format!("Save loaded at {}; resetting state.", date_text(date)));
             }
-            false
-        }
-        Step::Backward => {
-            let from = state.last_month.map(month_text).unwrap_or_else(|| "an unknown month".to_owned());
-            let to = date.map(month_key).map(month_text).unwrap_or_else(|| "an unreadable date".to_owned());
-            let line =
-                format!("The in-game date went backwards from {from} to {to}; not writing CA. The watcher stopped.");
-            log(events, &line);
-            let _ = events.send(Event::Running(false));
-            let _ = events.send(Event::Stopped(line));
-            *watch = None;
-            true
         }
         Step::Settle => {
             let Some(now) = date else {
-                return false;
+                return;
             };
             let Some(key) = key else {
-                return false;
+                return;
             };
             match plan_growth(session, &state.settings) {
                 Ok(plan) => {
@@ -333,7 +299,6 @@ fn tick(session: Option<&Session>, watch: &mut Option<Watch>, events: &Sender<Ev
                 Err(error) => log(events, &format!("Cannot plan growth ({error}); retrying.")),
             }
             state.last_month = Some(key);
-            true
         }
     }
 }
@@ -344,13 +309,6 @@ fn log(events: &Sender<Event>, line: &str) {
 
 fn date_text(date: FmDate) -> String {
     format!("{:04}-{:02}-{:02}", date.year, date.month, date.day)
-}
-
-/// A month key back to `YYYY-MM`.
-fn month_text(key: i32) -> String {
-    let year = (key - 1).div_euclid(12);
-    let month = (key - 1).rem_euclid(12) + 1;
-    format!("{year:04}-{month:02}")
 }
 
 #[cfg(test)]
@@ -376,8 +334,8 @@ mod tests {
     }
 
     #[test]
-    fn a_backward_month_without_a_load_is_an_error() {
-        assert_eq!(decide((Some(3), Some(3)), Some(MONTH + 1), Some(MONTH)), Step::Backward);
+    fn a_backward_month_without_a_load_does_nothing() {
+        assert_eq!(decide((Some(3), Some(3)), Some(MONTH + 1), Some(MONTH)), Step::Idle);
     }
 
     #[test]
