@@ -74,8 +74,11 @@ impl PositionLine {
         self.chosen.last().map(|player| player.aca)
     }
 
-    /// The status the window shows: `empty`, `NEEDS DEPTH xN`, `covered by …`, `N short`, or `ok`.
+    /// The status the window shows: `not used`, `empty`, `NEEDS DEPTH xN`, `covered by …`, `N short`, or `ok`.
     pub fn status(&self) -> String {
+        if self.quota == 0 {
+            return "not used".to_owned();
+        }
         if self.chosen.is_empty() {
             return "empty".to_owned();
         }
@@ -102,7 +105,7 @@ pub struct Sale {
 /// Everything the squad window shows of one read.
 #[derive(Debug, Clone)]
 pub struct FilledSquad {
-    /// The depth quota per position, in the order the formation names them.
+    /// The depth quota of every position, in the game's order; a position the formation leaves out has a quota of 0.
     pub depth: Vec<(String, usize)>,
     pub floor: Option<i32>,
     pub positions: Vec<PositionLine>,
@@ -163,7 +166,8 @@ pub fn build_squad(candidates: &[Candidate], settings: &GrowthSettings) -> Resul
 }
 
 /// Parses the formation text: `POSITION COUNT` pairs separated by commas, semicolons or newlines. The count is the
-/// number of starters; `=` may stand in for the space. Keys are compared upper case.
+/// number of starters and may be 0, which leaves the position unused. `=` may stand in for the space. Keys are compared
+/// upper case.
 pub fn parse_formation(text: &str) -> Result<Vec<(String, u8)>, String> {
     let mut formation = Vec::new();
     for chunk in text.split([',', ';', '\n']) {
@@ -196,18 +200,65 @@ pub fn parse_formation(text: &str) -> Result<Vec<(String, u8)>, String> {
     Ok(formation)
 }
 
-/// The depth quota for every position: the goalkeeper needs two players, and every other position gets two per starter
-/// plus two. The formation must have eleven starters.
+/// The starters of every position in the game's order; a position the text leaves out gets 0. Use this to edit a
+/// formation one position at a time.
+pub fn position_counts(formation: &[(String, u8)]) -> Vec<(String, u8)> {
+    POSITIONS
+        .iter()
+        .map(|position| {
+            let count = formation.iter().find(|(key, _)| key == position).map_or(0, |(_, count)| *count);
+            ((*position).to_owned(), count)
+        })
+        .collect()
+}
+
+/// Ordered counts for all 15 positions from position/count pairs, as a formation file stores them. A missing position
+/// gets 0; unknown positions are an error, and the counts must add up to 11.
+pub fn counts_from_map(counts: impl IntoIterator<Item = (String, u8)>) -> Result<Vec<(String, u8)>, String> {
+    let mut ordered = position_counts(&[]);
+    for (key, count) in counts {
+        let key = key.trim().to_uppercase();
+        let Some(slot) = ordered.iter_mut().find(|(position, _)| position == &key) else {
+            return Err(format!("unknown position `{key}`"));
+        };
+        slot.1 = count;
+    }
+    let starters: u32 = ordered.iter().map(|(_, count)| u32::from(*count)).sum();
+    if starters != 11 {
+        return Err(format!("the starters must add up to 11, not {starters}"));
+    }
+    Ok(ordered)
+}
+
+/// The formation text for counts, in the game's order, leaving out positions with no starters: `GK 1, DC 3, ...`.
+pub fn formation_text(counts: &[(String, u8)]) -> String {
+    counts
+        .iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(position, count)| format!("{position} {count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The depth quota of every position in the game's order: the goalkeeper needs two players, and every other position
+/// gets two per starter plus two. A position with no starters gets no quota. The formation must have eleven starters.
 pub fn depth_quotas(formation: &[(String, u8)]) -> Result<Vec<(String, usize)>, String> {
     let starters: u32 = formation.iter().map(|(_, count)| u32::from(*count)).sum();
     if starters != 11 {
         return Err(format!("the formation must have 11 starters, not {starters}"));
     }
-    Ok(formation
+    Ok(POSITIONS
         .iter()
-        .map(|(position, count)| {
-            let quota = if position == "GK" { GOALKEEPER_DEPTH } else { usize::from(*count) * 2 + 2 };
-            (position.clone(), quota)
+        .map(|position| {
+            let count = formation.iter().find(|(key, _)| key == position).map_or(0, |(_, count)| usize::from(*count));
+            let quota = if count == 0 {
+                0
+            } else if *position == "GK" {
+                GOALKEEPER_DEPTH
+            } else {
+                count * 2 + 2
+            };
+            ((*position).to_owned(), quota)
         })
         .collect())
 }
@@ -368,20 +419,52 @@ mod tests {
     fn the_default_formation_fills_eleven_starters() {
         let formation = parse_formation(DEFAULT_FORMATION).unwrap();
         let quotas: Vec<_> = depth_quotas(&formation).unwrap();
+        assert_eq!(quotas.len(), POSITIONS.len()); // every position is shown, even an unused one
         assert_eq!(quotas.iter().map(|(_, quota)| quota).sum::<usize>(), 2 + 4 + 4 + 8 + 6 + 4 + 4 + 4);
         assert!(quotas.contains(&("GK".to_owned(), 2)));
         assert!(quotas.contains(&("DC".to_owned(), 8)));
+        assert!(quotas.contains(&("AMC".to_owned(), 0)));
     }
 
     #[test]
     fn the_formation_is_checked() {
         assert!(parse_formation("GK 1, DC 3, MC 2, ST 5").is_ok()); // 11 starters
+        assert!(parse_formation("GK 1, DC 3, MC 2, ST 5, AML 0").is_ok()); // an explicit zero changes nothing
         assert!(parse_formation("GK 1, DC 3, MC 2, ST 4").and_then(|f| depth_quotas(&f)).is_err()); // 10
         assert!(parse_formation("GK 1, GK 1, DC 3, MC 2, ST 4").is_err()); // twice
         assert!(parse_formation("GK 1, XX 10").is_err()); // unknown
         assert!(parse_formation("GK=1, DC=3, MC=2, ST=5").is_ok());
         assert!(parse_formation("GK, DC 3, MC 2, ST 6").is_err());
         assert!(parse_formation("").is_err());
+    }
+
+    #[test]
+    fn counts_and_text_round_trip_in_the_game_order() {
+        let formation = parse_formation("GK 1, DC 3, MC 2, AML 0, AMC 1, ST 4").unwrap();
+        let counts = position_counts(&formation);
+        assert_eq!(counts.len(), POSITIONS.len());
+        assert_eq!(counts.iter().find(|(position, _)| position == "AML").unwrap().1, 0);
+        assert_eq!(counts.iter().find(|(position, _)| position == "AMC").unwrap().1, 1);
+        // Zeros are left out of the text; the positions that remain stay in the game's order.
+        assert_eq!(formation_text(&counts), "GK 1, DC 3, MC 2, AMC 1, ST 4");
+        assert_eq!(position_counts(&parse_formation(&formation_text(&counts)).unwrap()), counts);
+    }
+
+    #[test]
+    fn counts_from_a_file_are_checked_and_ordered() {
+        let counts = counts_from_map([
+            ("aml".to_owned(), 0),
+            ("AMC".to_owned(), 1),
+            ("GK".to_owned(), 1),
+            ("DC".to_owned(), 3),
+            ("MC".to_owned(), 2),
+            ("ST".to_owned(), 4),
+        ])
+        .unwrap();
+        assert_eq!(counts.len(), POSITIONS.len());
+        assert_eq!(formation_text(&counts), "GK 1, DC 3, MC 2, AMC 1, ST 4");
+        assert!(counts_from_map([("GK".to_owned(), 1), ("XX".to_owned(), 10)]).is_err());
+        assert!(counts_from_map([("GK".to_owned(), 1), ("ST".to_owned(), 3)]).is_err());
     }
 
     #[test]
@@ -408,12 +491,28 @@ mod tests {
         let filled: Vec<_> = report.positions.iter().map(|line| line.count()).collect();
         // Only the positions in the default formation can be filled, and every one by the same player.
         let mc = report.positions.iter().find(|line| line.position == "MC").unwrap();
-        let amc = report.positions.iter().find(|line| line.position == "AMC");
+        let amc = report.positions.iter().find(|line| line.position == "AMC").unwrap();
         assert_eq!(mc.count(), 1);
-        assert!(amc.is_none());
+        assert_eq!(amc.quota, 0);
+        assert_eq!(amc.status(), "not used");
         assert_eq!(report.unique, 1);
         assert_eq!(filled.iter().sum::<usize>(), 1);
         assert!(report.unused.is_empty());
+    }
+
+    #[test]
+    fn a_position_with_no_starters_needs_nobody() {
+        let settings = GrowthSettings { formation: "GK 1, DC 4, MC 4, ST 2, AML 0".to_owned(), ..settings() };
+        let players = vec![candidate(1, "Winger", Some(20.0), 100, 150, &["aml"])];
+        let report = build_squad(&players, &settings).unwrap();
+        let aml = report.positions.iter().find(|line| line.position == "AML").unwrap();
+        assert_eq!(aml.quota, 0);
+        assert_eq!(aml.count(), 0);
+        assert_eq!(aml.missing, 0);
+        assert_eq!(aml.status(), "not used");
+        // He only plays the unused position, so the squad has no room for him.
+        assert_eq!(report.unused.len(), 1);
+        assert_eq!(report.unique, 0);
     }
 
     #[test]

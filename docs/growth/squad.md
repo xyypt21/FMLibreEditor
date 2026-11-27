@@ -22,16 +22,29 @@ ca_after_years(ca, years) = round(ca + monthly_gain × 12 × years)
 
 ## 阵型与深度配额
 
-阵型在窗口顶部直接编辑，格式是 `位置 首发人数`，用逗号、分号或换行分隔，也可以写 `位置=人数`：
+阵型不再单独输入，直接在 Positions 表格的 `Starters` 列修改每个位置的首发人数：
 
-```text
-GK 1, WBL 1, WBR 1, DC 3, MC 2, AML 1, AMR 1, ST 1
+- 每个位置一行，始终显示 FM 的 15 个位置：`GK SW DL DC DR DM ML MC MR AML AMC AMR ST WBL WBR`；
+- 数量可以为 0，例如 `AML 0`，表示该位置不使用，显示 `not used`，不计缺口；
+- 所有位置的数量合计必须是 11；不满足时显示错误，不会应用，也不会保存无效阵型；
+- 守门员配额固定为 2；
+- 其他启用位置的配额 = 首发人数 × 2 + 2，所以 1 人需要 4 个，2 人需要 6 个，3 人需要 8 个；0 人则为 0；
+- 合计为 11 时立即按上次读取的球员重算。
+
+阵型保存在固定文件 `%APPDATA%\fm27-growth\formation.json`，启动时读取，关闭窗口时自动保存。文件是一个 JSON 对象，键为位置代码，值为首发人数：
+
+```json
+{
+  "GK": 1,
+  "DC": 3,
+  "MC": 2,
+  "AMC": 1,
+  "ST": 4,
+  "AML": 0
+}
 ```
 
-- 首发人数合计必须是 11；
-- 位置使用 FM 的 15 个位置代码：`GK SW DL DC DR DM ML MC MR AML AMC AMR ST WBL WBR`；
-- 守门员配额固定为 2；
-- 其他位置配额 = 首发人数 × 2 + 2，所以 1 人需要 4 个，2 人需要 6 个，3 人需要 8 个。
+没写的位置按 0 处理，所有数量合计必须为 11。文件缺失或无效时，回退到 `settings.json` 里的 `formation`，再回退到默认阵型。
 
 ## 选人
 
@@ -70,23 +83,31 @@ age > max_age - apa_shortfall_years 且 APA <= floor
 
 ```text
 顶部     Pause / Resume | Refresh now | Squad rules | 状态
-阵型     Formation 文本框 + Reset
-中间     Depth 配额、Positions 表格、Needs depth 汇总
-底部     Sell candidates 表格
+中间     Starters 编辑列（按门将/后卫/中场/前场分组）、Depth 配额、Positions 表格、Needs depth 汇总
+右侧     Sell candidates 表格（占一半宽度）
 ```
 
 - 自动连接，每 3 秒重试；
 - 每 30 秒读取一次；
 - `Pause` 停止自动读取，`Refresh now` 立即读取；
 - 读取失败时状态栏显示错误，保留上一次结果；
-- 关闭窗口时保存阵型。
+- 修改 `Starters` 且合计为 11 时立即应用；
+- 启动时读取 `formation.json`，关闭窗口时自动保存；未达到 11 的编辑不会保存。
 
 ## 设置
 
-与增长窗口共用：
+阵型单独保存在：
+
+```text
+%APPDATA%\fm27-growth\formation.json
+```
+
+启动时读取，退出时写入；文件无效时回退到 `settings.json` 的 `formation`，再回退到默认阵型。
+
+增长相关设置仍与增长窗口共用：
 
 ```text
 %APPDATA%\fm27-growth\settings.json
 ```
 
-阵容窗口只修改 `formation`，退出时通过“读回最新文件再改自己字段”的方式保存，因此不会覆盖增长窗口的值。增长窗口同理，只保存自己的数值字段。
+增长窗口只保存自己的数值字段，阵容窗口只保存 `formation.json`，两边不会互相覆盖。

@@ -57,7 +57,7 @@
 }
 ```
 
-增长窗口保存 `monthly_gain`、`max_age` 和 `cap`；阵容窗口保存 `formation`。两个窗口退出时都会先读回最新文件，只改自己的字段，所以同时打开也不会互相覆盖。`apa_shortfall_years` 和 `aca_growth_years` 目前只在设置文件里，供阵容窗口的 ACA/APA 使用。
+增长窗口保存 `monthly_gain`、`max_age` 和 `cap`。阵型不再写回这个文件，而是单独保存在 `formation.json`（见[阵容窗口](#阵容窗口)）；`settings.json` 里的 `formation` 只在 `formation.json` 缺失或无效时作为后备。两个窗口退出时都不会覆盖对方的字段。`apa_shortfall_years` 和 `aca_growth_years` 目前只在设置文件里，供阵容窗口的 ACA/APA 使用。
 
 ## 常见问题
 
@@ -93,9 +93,10 @@
 1. 启动 FM27 并载入存档；
 2. 运行 `fm27-squad-gui.exe`；
 3. 程序自动连接，每 30 秒读取一次；
-4. 顶部编辑 `Formation`，格式为 `GK 1, DC 3, ...`，合计必须 11；
-5. `Pause` 停止自动刷新，`Refresh now` 立即读取；
-6. 关闭窗口时保存阵型。
+4. 在 Positions 表格的 `Starters` 列调整每个位置的首发人数，可设为 0，合计必须为 11；
+5. 合计不为 11 时会显示错误，不会应用；
+6. 阵型启动时从 `%APPDATA%\fm27-growth\formation.json` 读取，关闭窗口时自动保存；
+7. `Pause` 停止自动刷新，`Refresh now` 立即读取。
 
 规则和表格含义见[阵容窗口](squad.md)。
 
@@ -103,4 +104,5 @@
 
 - 只读，不写游戏内存；
 - 中文字体回退与增长窗口相同；
-- 与增长窗口共用 `%APPDATA%\fm27-growth\settings.json`。
+- 增长设置与增长窗口共用 `%APPDATA%\fm27-growth\settings.json`；
+- 阵型单独保存在 `%APPDATA%\fm27-growth\formation.json`。

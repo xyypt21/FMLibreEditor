@@ -19,7 +19,7 @@
 2. 运行 `fm27-growth-gui.exe` 开始每月 CA 增长。
 3. 运行 `fm27-squad-gui.exe` 查看阵容缺口。
 
-两个程序共用 `%APPDATA%\fm27-growth\settings.json`。增长窗口自动开始监听；日期倒退时它会报错并停止，点 `Resume watching` 恢复。
+增长设置保存在 `%APPDATA%\fm27-growth\settings.json`，阵型单独保存在 `%APPDATA%\fm27-growth\formation.json`。增长窗口自动开始监听；日期倒退时它会报错并停止，点 `Resume watching` 恢复。阵容窗口在 Positions 表的 `Starters` 列编辑阵型，关闭时自动保存。
 
 ## 文档
 

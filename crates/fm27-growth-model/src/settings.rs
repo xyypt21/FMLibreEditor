@@ -1,6 +1,7 @@
 //! The growth settings and the rules that write CA: the age cap in steps, what one settlement adds, and when a player
 //! is too old or too close to his PA to grow.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,7 @@ pub struct GrowthSettings {
     /// How many years of growth ACA shows now.
     pub aca_growth_years: f32,
     pub cap: CapRule,
-    /// The squad window's formation, one `POSITION COUNT` pair per starter.
+    /// The squad window's formation, one `POSITION COUNT` pair per position; a count of 0 leaves it unused.
     pub formation: String,
 }
 
@@ -142,6 +143,29 @@ pub fn update_settings(edit: impl FnOnce(&mut GrowthSettings)) {
     let mut settings = load_settings();
     edit(&mut settings);
     save_settings(&settings);
+}
+
+/// Where the squad window keeps its formation: beside the settings file.
+pub fn formation_path() -> PathBuf {
+    settings_path().with_file_name("formation.json")
+}
+
+/// The formation file as all 15 starters, or `None` when it is missing or not a valid formation.
+pub fn load_formation() -> Option<Vec<(String, u8)>> {
+    let text = std::fs::read_to_string(formation_path()).ok()?;
+    let counts: BTreeMap<String, u8> = serde_json::from_str(&text).ok()?;
+    crate::squad::counts_from_map(counts).ok()
+}
+
+/// Writes all 15 starters, zeros included, creating the directory when needed.
+pub fn save_formation(counts: &[(String, u8)]) -> Result<(), String> {
+    let path = formation_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    }
+    let map: BTreeMap<&str, u8> = counts.iter().map(|(position, count)| (position.as_str(), *count)).collect();
+    let text = serde_json::to_string_pretty(&map).map_err(|error| error.to_string())?;
+    std::fs::write(path, text).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

@@ -43,19 +43,19 @@ serde_json     设置文件读写
 
 | 文件 | 内容 |
 | --- | --- |
-| `settings.rs` | `CapRule`、`GrowthSettings`、`validate`、`month_key`、`growth_cap`、`growth_target`、设置文件读写 |
+| `settings.rs` | `CapRule`、`GrowthSettings`、`validate`、`month_key`、`growth_cap`、`growth_target`、设置与阵型文件读写 |
 | `date.rs` | `Ymd` 与 `age_tenths_on`，用生日和游戏日期算 `岁 + 十分位` |
-| `squad.rs` | ACA/APA、阵型解析、深度配额、选人、地板/覆盖、出售规则 |
+| `squad.rs` | ACA/APA、阵型解析与计数互转、深度配额、选人、地板/覆盖、出售规则 |
 
 `GrowthSettings` 在原来的 `monthly_gain`、`max_age`、`cap` 之外新增：
 
 ```text
 apa_shortfall_years   默认 2.0，APA 最多预测多少年
 aca_growth_years      默认 0.5，ACA 现在展示多少年
-formation             默认 4-4-2 深度阵型文本
+formation             默认阵型文本；可写 0，合计 11，全部 15 个位置都会显示
 ```
 
-配置文件由两个窗口共享，`update_settings` 会先读回最新文件再改自己的字段，所以同时打开不会互相覆盖。
+增长设置由两个窗口共享，`update_settings` 会先读回最新文件再改自己的字段，所以同时打开不会互相覆盖。阵型则单独存放在 `formation.json`，由阵容窗口在退出时保存。
 
 ## 增长窗口：`crates/fm27-growth-gui`
 
@@ -137,10 +137,10 @@ fm27-growth-model  ACA/APA、阵型、缺口与出售规则
 | 内容 | 说明 |
 | --- | --- |
 | 顶部 | `Pause` / `Resume`、`Refresh now`、`Squad rules`、状态行 |
-| 阵型 | 文本框实时校验，必须 11 首发；`Reset` 恢复默认 4-4-2 |
-| Positions | 位置、已填/配额、最高 APA、最低 APA、状态；缺口红色、覆盖绿色 |
-| Sell candidates | 姓名、年龄、CA、PA、ACA、APA、原因 |
-| 退出 | `on_exit` 只保存 `formation` |
+| Positions | 位置、`Starters` 可编辑、已填/配额、最高 APA、最低 APA、状态；缺口红色、覆盖绿色 |
+| 阵型编辑 | `Starters` 合计为 11 时立即应用；不为 11 时显示错误，保留上一次有效阵型 |
+| Sell candidates | 右侧面板；姓名、年龄、CA、PA、ACA、APA、原因 |
+| 阵型文件 | 启动时读 `formation.json`，`on_exit` 只保存最后一次有效阵型 |
 
 ## `fmlibre-core` 的改动
 
