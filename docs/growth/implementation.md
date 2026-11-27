@@ -16,7 +16,7 @@
 ## 文件清单
 
 ```text
-.github/workflows/growth-release.yml      +72
+.github/workflows/growth-release.yml      +67
 .github/workflows/ci.yml                  删除
 .github/workflows/release.yml             删除
 Cargo.toml                                 +8
