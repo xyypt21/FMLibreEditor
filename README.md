@@ -1,148 +1,195 @@
-<p align="center">
-  <img src="app/src-tauri/icons/128x128@2x.png" alt="" width="96" height="96">
-</p>
+# FM27 CA Growth
 
-<h1 align="center">FMLibreEditor</h1>
+一个独立的 Windows 窗口程序，为《Football Manager 27》中**人类主教练执教的球队**提供每月 CA 增长。
 
-<p align="center">
-  A free, open-source live editor for <b>Football Manager 27</b>.<br>
-  Edit players, staff and clubs while the game runs.
-</p>
+它通过 [`fmlibre-core`](crates/fmlibre-core) 直接读取正在运行的游戏，不使用存档文件，也不依赖 Tauri、React 或 npm。
 
-<p align="center">
-  <a href="https://github.com/tozmoz/FMLibreEditor/releases/latest"><img src="https://img.shields.io/github/v/release/tozmoz/FMLibreEditor?label=release" alt="Latest release"></a>
-  <a href="https://github.com/tozmoz/FMLibreEditor/releases"><img src="https://img.shields.io/github/downloads/tozmoz/FMLibreEditor/total" alt="Downloads"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/tozmoz/FMLibreEditor" alt="License: GPL-3.0"></a>
-</p>
+> 修改游戏内存前请先备份存档。建议只用于离线单人游戏。
 
-Works on **Windows** (Xbox / Game Pass and Steam) and **macOS** (Steam).
+---
 
-**Open source, and open to your help:** fixes, translations, testing on your copy of the game or
-findings about FM27's data are all welcome. See [Contributing](#contributing).
+## 功能
 
-![My club: the club you manage, who needs a look, and its squad](docs/images/my-club.png)
+- **自动连接**：启动后自动寻找正在运行的 FM27，找不到时每 3 秒重试。
+- **自动监听**：连接并能读到游戏日期后，自动开始监听游戏月份。
+- **每月增长**：每个新的游戏月份，为受控球队中符合规则的球员增加 CA。
+- **只读预览**：启动时自动生成一次预览；之后可点 `Preview next settlement` 手动刷新。
+- **年龄上限**：按年龄分档限制 CA 不超过 PA 的一定比例。
+- **设置保存**：关闭窗口时自动保存，下次启动自动读取。
+- **中文显示**：自动加载 Windows 中文字体，俱乐部和球员中文名不会显示成方块。
+- **日志面板**：连接信息、结算数量、写入失败原因都记录在窗口底部。
 
-## Download
+---
 
-- **Windows 10 or 11:**
-  [FMLibreEditor-Setup.exe](https://github.com/tozmoz/FMLibreEditor/releases/latest/download/FMLibreEditor-Setup.exe)
-  or the [portable zip](https://github.com/tozmoz/FMLibreEditor/releases/latest/download/FMLibreEditor-portable.zip)
-- **macOS:**
-  [FMLibreEditor-macOS.zip](https://github.com/tozmoz/FMLibreEditor/releases/latest/download/FMLibreEditor-macOS.zip)
+## 增长规则
 
-How to install and use it: [docs/INSTALL.md](docs/INSTALL.md). How the Windows builds are
-signed: [Code signing policy](#code-signing-policy).
+### 1. 每月增长
 
-> **Status: beta.** Use it with offline, single-player saves, and back up your save
-> before editing.
+每进入一个新的游戏月份，对受控球队中每个可增长球员执行一次：
 
-## What it does
+```text
+新 CA = 当前 CA + Monthly CA gain
+```
 
-- **Browse and find:** every player, member of staff, club and national team, with search and
-  filters. **Ctrl+K** (**⌘K** on macOS) searches all of them and the app's commands.
-- **Edit:** attributes, abilities, positions, personality, traits, names, contracts with their
-  bonuses and clauses, reputation, finances and stadiums.
-- **Fix in one click:** heal injuries, lift bans, remove unhappiness, raise morale and
-  fitness, for one player or a whole team.
-- **Freeze:** a player's attributes, energy and match sharpness, or a club's money, so they do
-  not go down while the app runs.
-- **Move people:** transfer, swap or release players, sign free agents, move staff between
-  clubs. A transfer or a loan can also be left for the game to make, so it shows in the
-  player's career history.
-- **Change the rules:** a league's prize money, and a competition's squad rules, such as how
-  many foreign players a squad may register.
-- **Follow your club:** the app opens on the club you manage and who needs a look there, and
-  a profile's Development tab draws how a player has changed over time.
-- **Mass edit, undo and export:** change many at once with a preview, undo any change, and
-  write the lists to CSV or JSON.
-- **Care with your save:** it checks how it reads the game before it writes, stays read-only
-  on a version of FM27 it has not been checked with yet, and changes nothing after the game
-  loads another save until you reload the data.
+### 2. 年龄分档上限
 
-In English, Turkish, Spanish, German, French, Indonesian, Italian, Japanese, Korean, Russian
-and Simplified Chinese. The app updates itself on Windows and macOS.
+默认设置：
 
-Everything it does: [docs/FEATURES.md](docs/FEATURES.md). The game shows a change once you
-press **Continue** in FM.
+| 年龄 | CA 上限 |
+| --- | --- |
+| 18.0 及以下 | PA × 0.6 |
+| 18.1 – 20.9 | PA × 0.9 |
+| 21.0 及以上 | PA 本身 |
 
-![Editing a player: changes wait, highlighted, until you apply them](docs/images/edit.png)
+特点：
 
-## Where it works
+- 不再是线性插值，而是三个固定档位；
+- 只有整 18.0 仍在第一档，18.1 起进入第二档；
+- 到 21.0 直接使用 PA；
+- 上限四舍五入。
 
-| System | FM27 from | |
-| --- | --- | --- |
-| Windows 10 or 11 | Xbox / Game Pass | Checked before every release |
-| Windows 10 or 11 | Steam | Checked before every release |
-| macOS, Apple silicon | Steam | Supported |
-| macOS, Intel | Steam | Players, staff and clubs |
+这些值都可以在窗口左侧修改：
 
-After an update of FM27 the app opens read-only until a release knows the new version, which
-usually takes a few days. Which versions of the game it knows, and the features that wait on
-some of them: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+```text
+Age 1 / Ratio 1
+Age 2 / Ratio 2
+Max age
+Monthly CA gain
+```
 
-## Contributing
+### 3. 停止增长
 
-FMLibreEditor is built in the open, and you do not need to know reverse engineering to help.
-A first pull request can be small: a typo, a clearer sentence, one translated screen.
+`Max age` 默认 23：
 
-- **Pick up an issue:** the ones labelled
-  [help wanted](https://github.com/tozmoz/FMLibreEditor/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
-  are open for anyone. Comment on one to take it, so nobody else starts the same work. Have an
-  idea of your own? Open an issue or ask in
-  [Discussions](https://github.com/tozmoz/FMLibreEditor/discussions).
-- **Work on the interface without the game:** `npm run dev` in `app/` opens it in a browser with
-  made-up players (React + TypeScript).
-- **Translate:** another language is one file, see
-  [CONTRIBUTING.md](CONTRIBUTING.md#translating).
-- **Test:** try a release on your storefront (Game Pass, Steam, macOS) and
-  [report](https://github.com/tozmoz/FMLibreEditor/issues/new/choose) what does not work.
-- **Research:** found where FM27 keeps something? Share it in an issue; the notes in
-  [docs/recon](docs/recon) show what is known already.
+- 22.9 岁仍然可以增长；
+- 23.0 岁起完全停止。
 
-[CONTRIBUTING.md](CONTRIBUTING.md) explains how to start, and
-[docs/DEVELOPING.md](docs/DEVELOPING.md) how the editor works, how to build it and the
-command-line probe. Questions are welcome in
-[Discussions](https://github.com/tozmoz/FMLibreEditor/discussions). Please follow the
-[code of conduct](CODE_OF_CONDUCT.md).
+### 4. 其他限制
 
-Thanks to everyone who has contributed code, findings and testing; see the
-[contributors](https://github.com/tozmoz/FMLibreEditor/graphs/contributors) and the issues where
-much of FM27's data was worked out.
+- CA 和 PA 必须在 `1..=200`；
+- CA 不能高于 PA；
+- 已经达到 PA 的球员不增长；
+- 如果 `CA + 月增长` 会超过年龄上限，该球员本次跳过，**不会裁剪到上限**；
+- FM 中 PA 为负数区间时视为无效记录，跳过。
 
-FMLibreEditor is not affiliated with or endorsed by Sports Interactive or SEGA. Memory-layout
-leads come from GPL-3.0 project:
-[fm-editor](https://github.com/barak14/fm-editor) by barak14
+### 5. 写入时机
 
-## Code signing policy
+- 启动 watcher 本身不写 CA；
+- 只有游戏月份真正前进时才结算；
+- 载入存档不会触发增长，会重置月份状态；
+- 预览永远只读。
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org).
+---
 
-Windows signing is being set up: the Windows builds of the releases so far are not signed yet.
-Once it is in place, the installer and the programs in it are signed only when they are built
-by this repository's [release workflow](.github/workflows/release.yml) on GitHub Actions, from
-the source code in this repository. The macOS app is signed and notarized with the
-maintainer's Apple Developer ID.
+## 使用
 
-Team roles:
+1. 启动 FM27，并载入一个存档。
+2. 运行 `fm27-growth-gui.exe`。
+3. 程序会自动连接并开始监听。
+4. 修改左侧设置，点 `Preview next settlement` 查看计划。
+5. 游戏内点 **Continue** 推进月份，程序会在新月份写入 CA。
+6. 关闭窗口时会保存设置。
 
-- Committers and reviewers: [tozmoz](https://github.com/tozmoz), the maintainer. Every pull
-  request from anyone else is reviewed by the maintainer before it is merged.
-- Approvers: [tozmoz](https://github.com/tozmoz). Each release will be approved by hand before
-  it is signed.
+设置文件位置：
 
-Privacy: this program will not transfer any information to other networked systems unless
-specifically requested by the user or the person installing or operating it. The one
-exception it makes on its own: when it starts (at most once every six hours), and when
-**Check for updates** is pressed, it asks GitHub's public API for the latest FMLibreEditor
-release, sending nothing about you, your computer or your game. An update is downloaded from
-GitHub only when you click **Update**. The app reads and changes the memory of the Football
-Manager 27 process it connects to and nothing else on your system; on disk it writes only its
-own settings, its change history and its records of how your careers' players develop, and the
-exports you ask for.
+```text
+%APPDATA%\fm27-growth\settings.json
+```
 
-## License
+没有 `APPDATA` 时保存到当前目录的 `fm27-growth-settings.json`。
 
-GPL-3.0-or-later. See [LICENSE](LICENSE). The app's typeface,
-[Archivo](https://github.com/Omnibus-Type/Archivo) by Omnibus-Type, is bundled under the SIL
-Open Font License 1.1 ([app/licenses/Archivo-OFL.txt](app/licenses/Archivo-OFL.txt)).
+---
+
+## 从源码构建
+
+需要 Rust 工具链，以及 FM27 对应版本的 layout/profile（仓库中已包含）。
+
+```powershell
+cargo run -p fm27-growth-gui
+```
+
+Release 构建：
+
+```powershell
+cargo build -p fm27-growth-gui --release
+```
+
+生成文件：
+
+```text
+target\release\fm27-growth-gui.exe
+```
+
+测试与检查：
+
+```powershell
+cargo fmt -p fm27-growth-gui
+cargo test -p fm27-growth-gui
+cargo clippy -p fm27-growth-gui --all-targets -- -D warnings
+```
+
+---
+
+## 发布
+
+仓库包含独立的工作流：
+
+```text
+.github/workflows/growth-release.yml
+```
+
+推送 `growth-v*` 标签即可构建并创建草稿 Release：
+
+```powershell
+git tag growth-v0.1.0
+git push origin growth-v0.1.0
+```
+
+工作流会：
+
+1. 在 Windows 上构建 `fm27-growth-gui.exe`；
+2. 打包成 zip；
+3. 创建 draft GitHub Release 并附加 zip。
+
+在 Actions 页面手动运行该工作流时，只会生成 artifact，不会创建 Release。
+
+### 为什么不直接复用上游的 CI / Release
+
+**CI 可以复用。** 上游 `ci.yml` 执行的是：
+
+```text
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+`fm27-growth-gui` 是 workspace 成员，因此格式、clippy 和测试都会被自动检查，不需要额外的 CI 文件。
+
+**Release 不能直接复用。** 上游 `release.yml`：
+
+- 只由 `v*` 标签触发，并要求标签等于编辑器版本 `app/src-tauri/tauri.conf.json`，本程序无法使用独立版本号；
+- Windows 安装包需要签名私钥 `TAURI_SIGNING_PRIVATE_KEY`，fork 没有该 secret 时标签构建会失败（只有 PR 允许无签名构建）；
+- 发布任务只接受固定文件名，不含 `fm27-growth-gui.exe`，要加入就必须修改上游文件，后续合并上游会产生冲突；
+- 发布前会等待该提交上的 `ci.yml` 通过，而标签提交通常没有跑过 CI。
+
+因此发布保持为独立工作流 `growth-release.yml`，与上游编辑器发布互不影响。
+
+---
+
+## 实现方式
+
+- GUI：Rust + `eframe`/`egui`；
+- 游戏读取：`fmlibre-core` 的定向接口，只读取训练管理器中人类主教练的俱乐部和球队，不扫描全量 staff、俱乐部数组或球员数组；
+- 增长规则与结算：`crates/fm27-growth-gui/src/growth.rs`；
+- 后台连接与月份监听：`crates/fm27-growth-gui/src/worker.rs`；
+- 界面：`crates/fm27-growth-gui/src/main.rs`。
+
+---
+
+## 与上游的关系
+
+本项目基于 [FMLibreEditor](https://github.com/tozmoz/FMLibreEditor)，复用其 `fmlibre-core` 与 FM27 profile/layout 数据。
+
+FM27 CA Growth 只增加了一个独立 GUI crate 和少量公开的定向读取接口，便于继续合并上游更新。
+
+许可证与上游一致：GPL-3.0。
