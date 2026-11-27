@@ -205,35 +205,65 @@ fn start(session: Option<&Session>, settings: GrowthSettings, watch: &mut Option
     Ok(date)
 }
 
+/// What one poll does, decided from plain values so that it can be tested without a game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// Nothing to do: the month is unchanged, or the date cannot be read yet.
+    Idle,
+    /// The first month read: remember it, but do not write.
+    Remember,
+    /// The game's load counter changed: forget the month and wait for the next one.
+    Reset,
+    /// The in-game month changed: plan, write and remember the new month.
+    Settle,
+}
+
+/// The poll's decision. A load is recognised only by the game's own counter; the date is not used for that, as normal
+/// play moves it too.
+fn decide(loads: (Option<u64>, Option<u64>), last_month: Option<i32>, key: Option<i32>) -> Step {
+    if let (Some(then), Some(now)) = loads
+        && now != then
+    {
+        return Step::Reset;
+    }
+    match (last_month, key) {
+        (None, Some(_)) => Step::Remember,
+        (Some(last), Some(key)) if key == last => Step::Idle,
+        (Some(_), Some(_)) => Step::Settle,
+        (_, None) => Step::Idle,
+    }
+}
+
 /// Checks the in-game date and, on a new month, settles the plan. Returns whether it settled.
 fn tick(session: Option<&Session>, watch: &mut Watch, events: &Sender<Event>) -> bool {
     let Some(session) = session else {
         return false;
     };
 
-    // A load is recognised by the game's own counter; the date is not used, as normal play moves it too.
-    if let (Some(then), Some(now)) = (watch.loads, session.loads())
-        && now != then
-    {
-        watch.loads = Some(now);
-        if let Some(date) = session.game_date() {
-            watch.last_month = Some(GrowthSettings::month_key(date));
-            log(events, &format!("Save loaded at {}; resetting state.", date_text(date)));
-        }
-        return false;
-    }
-
-    let Some(now) = session.game_date() else {
-        return false;
-    };
-    let key = GrowthSettings::month_key(now);
-    match watch.last_month {
-        None => {
-            watch.last_month = Some(key);
+    let now_loads = session.loads();
+    let date = session.game_date();
+    let key = date.map(GrowthSettings::month_key);
+    match decide((watch.loads, now_loads), watch.last_month, key) {
+        Step::Idle => false,
+        Step::Remember => {
+            watch.last_month = key;
             false
         }
-        Some(last) if key == last => false,
-        Some(_) => {
+        Step::Reset => {
+            watch.loads = now_loads;
+            if let (Some(date), Some(key)) = (date, key) {
+                watch.last_month = Some(key);
+                log(events, &format!("Save loaded at {}; resetting state.", date_text(date)));
+            }
+            false
+        }
+        Step::Settle => {
+            let Some(now) = date else {
+                return false;
+            };
+            let Some(key) = key else {
+                return false;
+            };
             match plan_growth(session, &watch.settings) {
                 Ok(plan) => {
                     let count = plan.changes.len();
@@ -282,4 +312,52 @@ fn log(events: &Sender<Event>, line: &str) {
 
 fn date_text(date: FmDate) -> String {
     format!("{:04}-{:02}-{:02}", date.year, date.month, date.day)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Step, decide};
+
+    /// November 2026 as `decide` sees a month.
+    const MONTH: i32 = 2026 * 12 + 11;
+
+    #[test]
+    fn a_same_month_does_nothing() {
+        assert_eq!(decide((Some(3), Some(3)), Some(MONTH), Some(MONTH)), Step::Idle);
+    }
+
+    #[test]
+    fn the_first_month_is_remembered_without_writing() {
+        assert_eq!(decide((Some(3), Some(3)), None, Some(MONTH)), Step::Remember);
+    }
+
+    #[test]
+    fn a_new_month_settles() {
+        assert_eq!(decide((Some(3), Some(3)), Some(MONTH), Some(MONTH + 1)), Step::Settle);
+    }
+
+    #[test]
+    fn a_backward_month_without_a_load_still_settles() {
+        assert_eq!(decide((Some(3), Some(3)), Some(MONTH + 1), Some(MONTH)), Step::Settle);
+    }
+
+    #[test]
+    fn a_load_resets_the_month() {
+        assert_eq!(decide((Some(3), Some(4)), Some(MONTH), Some(MONTH)), Step::Reset);
+    }
+
+    #[test]
+    fn a_load_beats_the_month() {
+        assert_eq!(decide((Some(3), Some(4)), Some(MONTH), Some(MONTH + 1)), Step::Reset);
+    }
+
+    #[test]
+    fn an_unreadable_date_does_nothing() {
+        assert_eq!(decide((Some(3), Some(3)), Some(MONTH), None), Step::Idle);
+    }
+
+    #[test]
+    fn an_unreadable_counter_falls_back_to_the_date() {
+        assert_eq!(decide((None, None), Some(MONTH), Some(MONTH + 1)), Step::Settle);
+    }
 }
