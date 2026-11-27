@@ -233,11 +233,6 @@ fn tick(session: Option<&Session>, watch: &mut Watch, events: &Sender<Event>) ->
             false
         }
         Some(last) if key == last => false,
-        Some(last) if key < last => {
-            watch.last_month = Some(key);
-            log(events, &format!("Save loaded at {}; resetting state.", date_text(now)));
-            false
-        }
         Some(_) => {
             match plan_growth(session, &watch.settings) {
                 Ok(plan) => {

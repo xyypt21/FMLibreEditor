@@ -52,7 +52,7 @@ serde_json     设置的读写
 | `CapRule` | `age1/ratio1/age2/ratio2`，默认 `18 / 0.6 / 21 / 0.9` |
 | `GrowthSettings` | `monthly_gain`、`max_age`、`cap`，带 serde 默认值 |
 | `validate` | 月增长 > 0、`age1 < age2`、比例在 `(0, 1]` |
-| `month_key` | `年 × 12 + 月`，用于判断月份是否前进 |
+| `month_key` | `年 × 12 + 月`，用于判断月份是否变化 |
 | `growth_cap` | 三档上限：`age <= age1` 用 `ratio1`，`age < age2` 用 `ratio2`，否则 PA；结果四舍五入 |
 | `growth_target` | 校验 CA/PA 范围、`max_age`、上限后返回新 CA；超上限时返回 `None`，不裁剪 |
 | `controlled_clubs` | 从训练管理器读取人类主教练，再经 `club_at` 得到俱乐部 |
@@ -90,7 +90,7 @@ serde_json     设置的读写
 | 自动连接 | 首次立即尝试，失败每 3 秒重试 |
 | 首次预览 | 连接成功后自动预览一次，之后只由按钮触发 |
 | 自动监听 | 能读到游戏日期即启动 watcher，否则每 2 秒重试 |
-| `tick` | 比较“已载入存档次数”和月份；只有月份真正前进才结算 |
+| `tick` | 先用“已载入存档次数”识别读档并重置；月份变化时结算，日期不参与读档判断 |
 | 错误节流 | 相同错误只记录一次，成功后清空 |
 
 ## `fmlibre-core` 的改动
