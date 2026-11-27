@@ -25,6 +25,11 @@ game_ui = 0x53F9A60
 tactics_manager = 0x53EBC90
 training_manager = 0x53E8228
 
+# The static pointer to the transfer manager (TRANSFER_MANAGER), which keeps the transfers and loans the game has
+# agreed: 0x9C8 before the training manager's static, as the Steam build of the same update keeps it. The editor reads
+# the agreed moves from it; without the place it looks for the manager, which takes far longer.
+transfer_manager = 0x53E7860
+
 # The prize money competitions pay (layout.toml, [prize_money]; #123) was read on this build on a save of August 2027:
 # 482 settings, 458 held by a stage. The Champions League's league phase pays the 36 places from £10,222,480 to
 # £236,234, £1,803,967 per win and £601,323 per draw, the Libertadores £244,877 per win and the Süper Lig £114,699,

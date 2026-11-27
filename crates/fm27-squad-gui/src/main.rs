@@ -124,11 +124,13 @@ impl App {
         match event {
             Event::Status(status) => self.status = status,
             Event::Connected => {}
-            Event::Report(Ok(view)) => {
-                self.error = None;
-                self.view = Some(view);
-            }
-            Event::Report(Err(error)) => self.error = Some(error),
+            Event::Report(result) => match *result {
+                Ok(view) => {
+                    self.error = None;
+                    self.view = Some(view);
+                }
+                Err(error) => self.error = Some(error),
+            },
         }
     }
 
@@ -152,13 +154,18 @@ impl App {
                 let floor = view.squad.floor.map_or_else(|| "-".to_owned(), |floor| floor.to_string());
                 let date = view.date.clone().unwrap_or_else(|| "-".to_owned());
                 let text = format!(
-                    "Updated {} | {} players | {} in squad | floor {floor} | {} loaned out | date {date}",
+                    "Updated {} | {} players | {} in squad | floor {floor} | {} loaned out | {} leaving, {} joining | date {date}",
                     view.updated,
                     view.players,
                     view.squad.unique,
-                    view.squad.loaned_out.len()
+                    view.squad.loaned_out.len(),
+                    view.leaving,
+                    view.joining
                 );
                 ui.label(egui::RichText::new(text).color(MUTED_COLOR));
+                if let Some(error) = &view.transfer_error {
+                    ui.colored_label(GAP_COLOR, format!("Agreed transfers not read: {error}"));
+                }
             } else {
                 ui.spinner();
                 ui.label(&self.status);
@@ -372,6 +379,10 @@ impl App {
             number(f32::from(settings.max_age) - settings.apa_shortfall_years)
         ));
         ui.label("Players on loan at another club are left out of the squad; players on loan here stay.");
+        ui.label(
+            "A player with a transfer or loan away agreed is left out, and a player with a transfer or loan to the \
+             club agreed is added, as the game will have the squad on the day of the move.",
+        );
         ui.add_space(6.0);
         ui.strong("Settings");
         ui.label(

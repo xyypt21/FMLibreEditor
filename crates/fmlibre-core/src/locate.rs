@@ -339,9 +339,26 @@ pub fn search_retirement_manager(session: &Session) -> Vec<u64> {
     pointers_to(session, MANAGER_CLASS)
 }
 
+/// The game's one transfer manager (see [`crate::profile::TransfersLayout`]): the object the static pointer the build
+/// profile places names. The editor neither scans the plugin for it nor guesses its place from other builds: a build
+/// without the place reads no agreed moves. `None` when the pointer does not lead to the manager of its class.
+pub(crate) fn find_transfer_manager(session: &Session, class: &str) -> Option<Place> {
+    let expected = crate::rtti::mangled(class);
+    let rva = session.profile.as_ref().and_then(|profile| profile.transfer_manager)?;
+    session
+        .process
+        .read_u64(session.plugin.base + rva)
+        .ok()
+        .filter(|&manager| is_user_pointer(manager))
+        .filter(|&manager| {
+            crate::rtti::class_of(&session.process, &session.plugin, manager).is_some_and(|name| name == expected)
+        })
+        .map(|_| Place { rva, found: Found::Profile })
+}
+
 /// Every place in the plugin's writable data that points at an object of `class` (as written in C++), by RVA. Its
 /// vtables are found from the class's name, which takes a second or so.
-fn pointers_to(session: &Session, class: &str) -> Vec<u64> {
+pub(crate) fn pointers_to(session: &Session, class: &str) -> Vec<u64> {
     let vtables: HashSet<u64> = crate::rtti::vtables(&session.process, &session.plugin, class).into_iter().collect();
     if vtables.is_empty() {
         return Vec::new();

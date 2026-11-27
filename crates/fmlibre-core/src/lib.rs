@@ -3,6 +3,7 @@
 
 #![cfg(any(windows, target_os = "macos"))]
 
+mod agreed;
 mod arranged;
 #[cfg(target_os = "macos")]
 pub mod bridge_setup;
@@ -60,6 +61,7 @@ mod transfer;
 mod tree;
 mod youth_intake;
 
+pub use agreed::AgreedMove;
 pub use arranged::{Arranged, ArrangedPlan, LoanDeal, season_loan_end};
 pub use calibrate::{ArrayRef, EntityArrays, calibrate};
 pub use clauses::{

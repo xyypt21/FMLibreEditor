@@ -469,7 +469,7 @@ impl Session {
     }
 
     /// The vtables of the game's transfer offers and loan offers, found by their names the first time they are needed.
-    fn offer_classes(&self, t: &TransfersLayout) -> &OfferClasses {
+    pub(crate) fn offer_classes(&self, t: &TransfersLayout) -> &OfferClasses {
         self.offer_classes.get_or_init(|| OfferClasses {
             transfer: rtti::vtables(&self.process, &self.plugin, &t.offer_class),
             loan: t
@@ -766,30 +766,31 @@ impl Session {
         Ok(links.0)
     }
 
-    /// The transfer manager: the one object of its class. Found once, in a pass over the game's memory, and kept while
-    /// it is still there: the game makes another when it loads a save.
-    fn transfer_manager(&self, t: &TransfersLayout) -> Result<u64, MoveError> {
+    /// Where the static pointer to the transfer manager is ([`BuildProfile::transfer_manager`]). The editor reads only
+    /// the place the build profile gives: it neither scans the plugin for the manager nor guesses from other builds.
+    pub fn transfer_manager_place(&self) -> Option<crate::locate::Place> {
+        let t = self.layout.transfers.as_ref()?;
+        crate::locate::find_transfer_manager(self, &t.manager_class)
+    }
+
+    /// The transfer manager: the one object of its class, which a static pointer in the plugin's writable data leads to.
+    /// Found once, and kept while it is still there: the game makes another when it loads a save.
+    pub(crate) fn transfer_manager(&self, t: &TransfersLayout) -> Result<u64, MoveError> {
         let mut kept = self.transfer_manager.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((manager, vtable)) = *kept
             && self.process.read_u64(manager).ok() == Some(vtable)
         {
             return Ok(manager);
         }
-        let vtables = rtti::vtables(&self.process, &self.plugin, &t.manager_class);
-        let objects = rtti::objects(&self.process, &self.plugin, &vtables)?;
-        let managers: Vec<(u64, u64)> =
-            objects.into_iter().flat_map(|(vtable, at)| at.into_iter().map(move |manager| (manager, vtable))).collect();
-        match managers[..] {
-            [found] => {
-                *kept = Some(found);
-                Ok(found.0)
-            }
-            _ => Err(MoveError::NoTransfers),
-        }
+        let place = crate::locate::find_transfer_manager(self, &t.manager_class).ok_or(MoveError::NoTransfers)?;
+        let manager = self.process.read_u64(self.plugin.base + place.rva)?;
+        let vtable = self.process.read_u64(manager)?;
+        *kept = Some((manager, vtable));
+        Ok(manager)
     }
 
     /// One of the manager's lists of pointers, when it checks out.
-    fn manager_list(&self, header: u64) -> Result<PointerList, MoveError> {
+    pub(crate) fn manager_list(&self, header: u64) -> Result<PointerList, MoveError> {
         PointerList::read_up_to(&self.process, header, MOST_OFFERS)?.ok_or(MoveError::NoTransfers)
     }
 

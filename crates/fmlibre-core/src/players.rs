@@ -87,6 +87,165 @@ impl Listed for PlayerSummary {
 /// Players with a search index over their names.
 pub type PlayerIndex = SearchIndex<PlayerSummary>;
 
+/// Reads player objects one at a time, with the memoisation a full pass uses. `read_players` reads the players array
+/// with it; the transfers agreed for a later day use it to read the players those offers name.
+pub(crate) struct PlayerReader<'a> {
+    process: &'a Process,
+    layout: &'a Layout,
+    today: Option<FmDate>,
+    plain_len: usize,
+    buf: Vec<u8>,
+    contract_buf: Vec<u8>,
+    attribute_offsets: Vec<Option<u64>>,
+    /// The person-block shift is a property of the object's class, so decide it once per vtable.
+    shifts: HashMap<u64, u64>,
+    /// Many players share first names, clubs and nations; resolve each pointer once.
+    names: Memo,
+    clubs: Memo,
+    club_uids: HashMap<u64, Option<u32>>,
+    nations: Memo,
+    nation_uids: HashMap<u64, Option<u32>>,
+}
+
+impl<'a> PlayerReader<'a> {
+    pub(crate) fn new(process: &'a Process, layout: &'a Layout, today: Option<FmDate>) -> Self {
+        let p = &layout.player;
+        Self {
+            process,
+            layout,
+            today,
+            plain_len: p.end() as usize,
+            buf: Vec::with_capacity(p.end() as usize + p.max_shift() as usize),
+            contract_buf: vec![0u8; layout.contract.end() as usize],
+            attribute_offsets: attribute_keys(ATTRIBUTE_GROUPS).map(|key| p.attributes.get(key).copied()).collect(),
+            shifts: HashMap::new(),
+            names: Memo::default(),
+            clubs: Memo::default(),
+            club_uids: HashMap::new(),
+            nations: Memo::default(),
+            nation_uids: HashMap::new(),
+        }
+    }
+
+    /// Reads the player at `object`; `None` when the object cannot be read.
+    pub(crate) fn read(&mut self, object: u64) -> Option<PlayerSummary> {
+        let process = self.process;
+        let layout = self.layout;
+        let p = &layout.player;
+        let c = &layout.contract;
+        let plain_len = self.plain_len;
+
+        self.buf.resize(plain_len, 0);
+        if process.read_into(object, &mut self.buf).is_err() {
+            return None;
+        }
+        let class = u64::from_le_bytes(self.buf[..8].try_into().expect("8 bytes"));
+        let shift = *self.shifts.entry(class).or_insert_with(|| person_shift(process, p, object));
+        if shift > 0 {
+            self.buf.resize(plain_len + shift as usize, 0);
+            if process.read_into(object, &mut self.buf).is_err() {
+                return None;
+            }
+        }
+
+        // Read the plain fields first so the buffer borrow ends before the memos are used.
+        let (
+            uid,
+            full_name_ptr,
+            common_ptr,
+            first_ptr,
+            last_ptr,
+            team,
+            nation_ptr,
+            date_of_birth,
+            position_ratings,
+            attributes,
+            has_contract,
+            current_ability,
+            potential_ability,
+            transfer_value,
+            woman,
+            listing,
+        ) = {
+            let buf = &self.buf;
+            let at = |offset: u64| p.at(offset, shift) as usize;
+            let u16_at = |offset: u64| u16::from_le_bytes([buf[at(offset)], buf[at(offset) + 1]]);
+            let u32_at = |offset: u64| u32::from_le_bytes(buf[at(offset)..at(offset) + 4].try_into().expect("4 bytes"));
+            let u64_at = |offset: u64| u64::from_le_bytes(buf[at(offset)..at(offset) + 8].try_into().expect("8 bytes"));
+            let mut position_ratings = [0u8; POSITIONS.len()];
+            position_ratings.copy_from_slice(&buf[at(p.positions)..at(p.positions) + POSITIONS.len()]);
+            let attributes: Vec<u8> = self
+                .attribute_offsets
+                .iter()
+                .map(|offset| offset.map_or(0, |offset| Attribute::from_raw(buf[at(offset)]).value))
+                .collect();
+            // The contract in one read: its end date, and the listings.
+            let contract = u64_at(p.contract);
+            let has_contract = is_user_pointer(contract) && process.read_into(contract, &mut self.contract_buf).is_ok();
+            let listing = if has_contract { self.contract_buf[c.listing as usize] } else { 0 };
+            (
+                u32_at(p.uid),
+                u64_at(p.full_name),
+                u64_at(p.common_name),
+                u64_at(p.first_name),
+                u64_at(p.last_name),
+                u64_at(p.team),
+                u64_at(p.nation),
+                FmDate::from_raw(u16_at(p.date_of_birth), u16_at(p.date_of_birth + 2)),
+                position_ratings,
+                attributes,
+                has_contract,
+                u16_at(p.current_ability),
+                u16_at(p.potential_ability),
+                p.transfer_value.map(|offset| u32_at(offset) as i32),
+                p.gender.map(|offset| is_woman(buf[at(offset)])),
+                listing,
+            )
+        };
+
+        let full_name = read_fm_string(process, full_name_ptr);
+        let mut name_part = |offset| self.names.get(offset, |entry| read_name_entry(process, entry));
+        let (common, first, last) = (name_part(common_ptr), name_part(first_ptr), name_part(last_ptr));
+        let name = display_name(common, first, last, full_name.as_ref(), uid);
+
+        let club = self.clubs.get(team, |team| club_of_team(process, layout, team));
+        let club_uid = *self.club_uids.entry(team).or_insert_with(|| club_uid_of_team(process, layout, team));
+        let nation = self.nations.get(nation_ptr, |nation| nation_name(process, layout, nation));
+        let nation_uid = *self.nation_uids.entry(nation_ptr).or_insert_with(|| nation_uid(process, layout, nation_ptr));
+
+        let contract_u16 = |offset: u64| {
+            u16::from_le_bytes([self.contract_buf[offset as usize], self.contract_buf[offset as usize + 1]])
+        };
+        let contract_expires =
+            has_contract.then(|| FmDate::from_raw(contract_u16(c.expires), contract_u16(c.expires + 2))).flatten();
+
+        Some(PlayerSummary {
+            uid,
+            name,
+            full_name,
+            date_of_birth,
+            age: date_of_birth.zip(self.today).and_then(|(born, today)| born.age_on(today)),
+            nation_uid: nation.as_ref().and(nation_uid),
+            nation,
+            nation_address: nation_ptr,
+            club_uid: club.as_ref().and(club_uid),
+            club,
+            positions: natural_positions(&position_ratings),
+            contract_expires,
+            current_ability,
+            potential_ability: potential_ability as i16,
+            position_ratings,
+            attributes,
+            transfer_listed: listing & 1 != 0,
+            loan_listed: listing & 2 != 0,
+            transfer_value,
+            woman,
+            address: object,
+            shift,
+        })
+    }
+}
+
 /// Reads every player in the players array; ages are computed for `today`. Only reads memory.
 pub fn read_players(
     process: &Process,
@@ -95,101 +254,18 @@ pub fn read_players(
     layout: &Layout,
     today: Option<FmDate>,
 ) -> fmlibre_mem::Result<Vec<PlayerSummary>> {
-    let p = &layout.player;
-    let c = &layout.contract;
     let (begin, count) = array.locate(process, module)?;
     let pointers = process.read_bytes(begin, (count * 8) as usize)?;
-    let plain_len = p.end() as usize;
-    let mut buf = Vec::with_capacity(plain_len + p.max_shift() as usize);
-    let mut contract_buf = vec![0u8; c.end() as usize];
-    let attribute_offsets: Vec<Option<u64>> =
-        attribute_keys(ATTRIBUTE_GROUPS).map(|key| p.attributes.get(key).copied()).collect();
-
-    // The person-block shift is a property of the object's class, so decide it once per vtable.
-    let mut shifts: HashMap<u64, u64> = HashMap::new();
-    // Many players share first names, clubs and nations; resolve each pointer once.
-    let mut names = Memo::default();
-    let mut clubs = Memo::default();
-    let mut club_uids: HashMap<u64, Option<u32>> = HashMap::new();
-    let mut nations = Memo::default();
-    let mut nation_uids: HashMap<u64, Option<u32>> = HashMap::new();
-
+    let mut reader = PlayerReader::new(process, layout, today);
     let mut players = Vec::with_capacity(count as usize);
     for chunk in pointers.as_chunks::<8>().0 {
         let object = u64::from_le_bytes(*chunk);
         if !is_user_pointer(object) {
             continue;
         }
-        buf.resize(plain_len, 0);
-        if process.read_into(object, &mut buf).is_err() {
-            continue;
+        if let Some(player) = reader.read(object) {
+            players.push(player);
         }
-        let class = u64::from_le_bytes(buf[..8].try_into().expect("8 bytes"));
-        let shift = *shifts.entry(class).or_insert_with(|| person_shift(process, p, object));
-        if shift > 0 {
-            buf.resize(plain_len + shift as usize, 0);
-            if process.read_into(object, &mut buf).is_err() {
-                continue;
-            }
-        }
-
-        let at = |offset: u64| p.at(offset, shift) as usize;
-        let u16_at = |offset: u64| u16::from_le_bytes([buf[at(offset)], buf[at(offset) + 1]]);
-        let u32_at = |offset: u64| u32::from_le_bytes(buf[at(offset)..at(offset) + 4].try_into().expect("4 bytes"));
-        let u64_at = |offset: u64| u64::from_le_bytes(buf[at(offset)..at(offset) + 8].try_into().expect("8 bytes"));
-
-        let uid = u32_at(p.uid);
-        let full_name = read_fm_string(process, u64_at(p.full_name));
-        let mut name_part = |offset| names.get(u64_at(offset), |entry| read_name_entry(process, entry));
-        let (common, first, last) = (name_part(p.common_name), name_part(p.first_name), name_part(p.last_name));
-        let name = display_name(common, first, last, full_name.as_ref(), uid);
-
-        let team = u64_at(p.team);
-        let club = clubs.get(team, |team| club_of_team(process, layout, team));
-        let club_uid = *club_uids.entry(team).or_insert_with(|| club_uid_of_team(process, layout, team));
-        let nation_ptr = u64_at(p.nation);
-        let nation = nations.get(nation_ptr, |nation| nation_name(process, layout, nation));
-        let nation_uid = *nation_uids.entry(nation_ptr).or_insert_with(|| nation_uid(process, layout, nation_ptr));
-
-        let date_of_birth = FmDate::from_raw(u16_at(p.date_of_birth), u16_at(p.date_of_birth + 2));
-        let mut position_ratings = [0u8; POSITIONS.len()];
-        position_ratings.copy_from_slice(&buf[at(p.positions)..at(p.positions) + POSITIONS.len()]);
-        let attributes = attribute_offsets
-            .iter()
-            .map(|offset| offset.map_or(0, |offset| Attribute::from_raw(buf[at(offset)]).value))
-            .collect();
-        // The contract in one read: its end date, and the listings.
-        let contract = u64_at(p.contract);
-        let has_contract = is_user_pointer(contract) && process.read_into(contract, &mut contract_buf).is_ok();
-        let contract_u16 =
-            |offset: u64| u16::from_le_bytes([contract_buf[offset as usize], contract_buf[offset as usize + 1]]);
-        let contract_expires =
-            has_contract.then(|| FmDate::from_raw(contract_u16(c.expires), contract_u16(c.expires + 2))).flatten();
-        let listing = if has_contract { contract_buf[c.listing as usize] } else { 0 };
-        players.push(PlayerSummary {
-            uid,
-            name,
-            full_name,
-            date_of_birth,
-            age: date_of_birth.zip(today).and_then(|(born, today)| born.age_on(today)),
-            nation_uid: nation.as_ref().and(nation_uid),
-            nation,
-            nation_address: nation_ptr,
-            club_uid: club.as_ref().and(club_uid),
-            club,
-            positions: natural_positions(&position_ratings),
-            contract_expires,
-            current_ability: u16_at(p.current_ability),
-            potential_ability: u16_at(p.potential_ability) as i16,
-            position_ratings,
-            attributes,
-            transfer_listed: listing & 1 != 0,
-            loan_listed: listing & 2 != 0,
-            transfer_value: p.transfer_value.map(|offset| u32_at(offset) as i32),
-            woman: p.gender.map(|offset| is_woman(buf[at(offset)])),
-            address: object,
-            shift,
-        });
     }
     Ok(players)
 }

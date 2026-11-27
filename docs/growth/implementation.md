@@ -93,7 +93,7 @@ fm27-growth-model  共享规则
 | `install_fonts` | 依次尝试 `msyh.ttc`、`simhei.ttf`、`simsun.ttc`，解决中文方块 |
 | `App` | 左侧设置与按钮，右侧状态、计划表格、日志 |
 | 设置同步 | 数值变化时发送 `Command::Settings`，正在运行的 watcher 立即使用新规则 |
-| 日期倒退 | 显示错误与 `Resume watching` 按钮，watcher 停止后不会自动重启 |
+| 读档 | 只有游戏的读档计数变化才重置监听；日期倒退但未读档时什么都不写、直接忽略 |
 | 退出 | `on_exit` 只保存增长窗口自己的字段，保留阵容窗口的 `formation` |
 
 ### `src/worker.rs`：后台线程
@@ -102,13 +102,13 @@ fm27-growth-model  共享规则
 
 | 内容 | 说明 |
 | --- | --- |
-| `Command` | `Preview`、`Settings`、`Resume` |
-| `Event` | `Log`、`Connected`、`Plan`、`Running`、`Stopped` |
+| `Command` | `Preview`、`Settings` |
+| `Event` | `Log`、`Connected`、`Plan`、`Running` |
 | `spawn` | 建立双向通道，启动名为 `fm27-growth` 的线程 |
 | 自动连接 | 首次立即尝试，失败每 3 秒重试 |
 | 首次预览 | 连接成功后自动预览一次，之后只由按钮触发 |
 | 自动监听 | 能读到游戏日期即启动 watcher，否则每 2 秒重试 |
-| `decide` | 计数变化 → 读档重置；月份相同 → 空闲；月份前进 → 结算；月份倒退且未读档 → 报错并停止 |
+| `decide` | 计数变化 → 读档重置；月份前进 → 结算；月份相同或倒退 → 空闲 |
 | 错误节流 | 相同错误只记录一次，成功后清空 |
 
 ## 阵容窗口：`crates/fm27-squad-gui`
@@ -127,10 +127,17 @@ fm27-growth-model  ACA/APA、阵型、缺口与出售规则
 | --- | --- |
 | `Command` | `Refresh`、`Pause`、`Settings` |
 | `Event` | `Status`、`Connected`、`Report` |
-| `read_squad` | 读受控俱乐部、所属球队、关联 B 队，按 UID 去重；按 `TeamPlayer.team` 是否在本队集合判断租借在外 |
+| `read_squad` | 读受控俱乐部、所属球队、关联 B 队，按 UID 去重；按 `TeamPlayer.team` 是否在本队集合判断租借在外；读 `Session::agreed_moves()`，本队球员的买方不是本队则排除，买方是本队且不在名单中则加入 |
 | 自动刷新 | 连接后立即读一次，之后每 30 秒一次 |
 | 编辑阵型 | `Command::Settings` 直接用上次读到的球员重新计算，不重新读内存 |
-| 只读 | 不调用任何写入接口 |
+| 只读 | 不调用任何写入接口，包括只读的转会提议 |
+
+### 规则层的只读接口
+
+`fmlibre-core` 的 `agreed.rs` 新增 `Session::agreed_moves()`：转会经理的静态指针位置**只取构建档案里的 `transfer_manager`**，不做推算、不做全量扫描；
+读取后用对象的 RTTI 类名（`rtti::class_of`）校验。没有该位置的构建读不到已同意转会，阵容窗口保持原样并提示。找到的位置缓存在 `Session` 里，读档后自动重找。
+随后遍历其提议列表，取 state 19（已同意）且移动日期在游戏日期之后的转会/租借提议，只对这几百条提议校验类名，再按 person 指针找到球员对象并用
+`PlayerReader` 读出资料。实测首次读取约 0.1 秒，之后约 10 毫秒。
 
 ### `src/main.rs`
 

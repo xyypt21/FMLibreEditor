@@ -3787,6 +3787,7 @@ fn profile(session: &Session, out: Option<&Path>) -> Result<()> {
         game_ui: game_ui.map(|place| place.rva),
         tactics_manager: managers[0].map(|place| place.rva),
         training_manager: managers[1].map(|place| place.rva),
+        transfer_manager: session.transfer_manager_place().map(|place| place.rva),
         // Checked against the game's screens, not looked for: kept from the built-in profile.
         prize_money: session.profile.as_ref().is_some_and(|profile| profile.prize_money),
         sponsorships: session.profile.as_ref().is_some_and(|profile| profile.sponsorships),
@@ -3880,6 +3881,7 @@ fn profile(session: &Session, out: Option<&Path>) -> Result<()> {
             for (name, built, seen) in [
                 ("tactics_manager", built_in.tactics_manager, found.tactics_manager),
                 ("training_manager", built_in.training_manager, found.training_manager),
+                ("transfer_manager", built_in.transfer_manager, found.transfer_manager),
             ] {
                 if built != seen {
                     differences.push(format!("{name} {} built in, {} found", hex_or_none(built), hex_or_none(seen)));

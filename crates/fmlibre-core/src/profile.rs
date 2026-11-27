@@ -1253,6 +1253,10 @@ pub struct BuildProfile {
     /// RVA in the game plugin of the static pointer to the training manager (`TRAINING_MANAGER`), which keeps the
     /// history of training of the human managers' players; looked for as [`BuildProfile::tactics_manager`] is.
     pub training_manager: Option<u64>,
+    /// RVA in the game plugin of the static pointer to the transfer manager (`TRANSFER_MANAGER`), which keeps the
+    /// transfers and loans the game has agreed ([`TransfersLayout`]). The editor reads it only where a build places it:
+    /// it neither scans the plugin for the manager nor guesses the place from other builds.
+    pub transfer_manager: Option<u64>,
     /// Whether the prize money competitions pay ([`PrizeMoneyLayout`]) was read on this build and found to be what the
     /// game shows. The app shows and changes it only on such builds; the probe reads it on any.
     #[serde(default)]
@@ -1539,6 +1543,9 @@ pub fn profile_text(profile: &BuildProfile, notes: &ProfileNotes) -> String {
     }
     if let Some(rva) = profile.training_manager {
         text += &format!("\ntraining_manager = {rva:#X}\n");
+    }
+    if let Some(rva) = profile.transfer_manager {
+        text += &format!("\ntransfer_manager = {rva:#X}\n");
     }
     if profile.prize_money {
         text += "\nprize_money = true\n";
