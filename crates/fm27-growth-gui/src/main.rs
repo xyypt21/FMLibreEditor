@@ -90,9 +90,9 @@ struct App {
     commands: Sender<Command>,
     events: Receiver<Event>,
     settings: GrowthSettings,
+    sent_settings: GrowthSettings,
     connected: bool,
     running: bool,
-    summary: String,
     plan: Option<PlanView>,
     log: VecDeque<String>,
     error: Option<String>,
@@ -107,14 +107,15 @@ impl App {
             commands,
             events,
             settings,
+            sent_settings: GrowthSettings::default(),
             connected: false,
             running: false,
-            summary: "Waiting for the game…".to_owned(),
             plan: None,
             log: VecDeque::new(),
             error: None,
             show_rules: false,
         };
+        app.sent_settings = app.settings.clone();
         app.push_log(format!("Settings: {}", settings_path().display()));
         app.push_log("Waiting for the game…".to_owned());
         app
@@ -137,14 +138,15 @@ impl App {
             Event::Connected(Ok(summary)) => {
                 self.connected = true;
                 self.error = None;
-                self.summary = summary;
                 self.push_log("Connected.".to_owned());
+                for line in summary.lines() {
+                    self.push_log(line.to_owned());
+                }
             }
             Event::Connected(Err(error)) => {
                 self.connected = false;
                 self.running = false;
                 self.plan = None;
-                self.summary = "Waiting for the game…".to_owned();
                 self.push_log(format!("Connect failed: {error}"));
                 self.error = Some(error);
             }
@@ -165,10 +167,6 @@ impl App {
             if ui.add_enabled(self.connected, egui::Button::new("Preview next settlement")).clicked() {
                 self.send(Command::Preview(self.settings.clone()));
             }
-            if ui.add_enabled(self.connected && !self.running, egui::Button::new("Start watcher (writes CA)")).clicked()
-            {
-                self.send(Command::Start(self.settings.clone()));
-            }
             if ui.button("Growth rules").clicked() {
                 self.show_rules = true;
             }
@@ -176,7 +174,7 @@ impl App {
             if self.running {
                 ui.colored_label(egui::Color32::from_rgb(0x1a, 0x7f, 0x37), "watching the in-game month");
             } else if self.connected {
-                ui.label("connected; press Preview to refresh");
+                ui.label("connected; waiting for a save to watch");
             } else {
                 ui.spinner();
                 ui.label("looking for the game…");
@@ -222,17 +220,11 @@ impl App {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(
-                "The watcher writes the planned CA on each new in-game month. The preview runs once at startup and only reads.",
+                "The watcher starts by itself and writes the planned CA on each new in-game month. The preview runs once at startup and only reads.",
             )
             .small()
             .weak(),
         );
-
-        ui.separator();
-        ui.heading("Connection");
-        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-            ui.label(egui::RichText::new(&self.summary).monospace());
-        });
     }
 
     fn plan_panel(&mut self, ui: &mut egui::Ui) {
@@ -329,6 +321,12 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         while let Ok(event) = self.events.try_recv() {
             self.on_event(event);
+        }
+
+        // With no Start button, the worker keeps its watcher settings current from these edits.
+        if self.settings != self.sent_settings {
+            self.sent_settings = self.settings.clone();
+            self.send(Command::Settings(self.settings.clone()));
         }
 
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));

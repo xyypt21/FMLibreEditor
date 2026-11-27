@@ -20,7 +20,7 @@ const RECONNECT: Duration = Duration::from_secs(3);
 
 pub enum Command {
     Preview(GrowthSettings),
-    Start(GrowthSettings),
+    Settings(GrowthSettings),
 }
 
 pub enum Event {
@@ -57,12 +57,13 @@ pub fn spawn(settings: GrowthSettings) -> (Sender<Command>, Receiver<Event>) {
     (commands, outbox)
 }
 
-fn run(commands: Receiver<Command>, events: Sender<Event>, settings: GrowthSettings) {
+fn run(commands: Receiver<Command>, events: Sender<Event>, mut settings: GrowthSettings) {
     let mut session: Option<Session> = None;
     let mut watch: Option<Watch> = None;
     let mut next_connect = Instant::now();
     let mut last_connect_error: Option<String> = None;
     let mut last_plan_error: Option<String> = None;
+    let mut last_start_error: Option<String> = None;
     loop {
         // Connect on the first pass and retry while the game is not running.
         if session.is_none() && Instant::now() >= next_connect {
@@ -75,24 +76,42 @@ fn run(commands: Receiver<Command>, events: Sender<Event>, settings: GrowthSetti
             }
         }
 
-        // Wait for a command; wake up while disconnected or watching, to retry or to poll the date.
-        let command = if session.is_none() || watch.is_some() {
-            match commands.recv_timeout(POLL) {
-                Ok(command) => Some(command),
-                Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => break,
+        // Start watching by itself as soon as a save can be watched; retry while the game is at its menus.
+        if session.is_some() && watch.is_none() {
+            match start(session.as_ref(), settings.clone(), &mut watch) {
+                Ok(date) => {
+                    last_start_error = None;
+                    log(&events, &format!("Game date {}; watching. The next month will write CA.", date_text(date)));
+                    let _ = events.send(Event::Running(true));
+                }
+                Err(error) => {
+                    if last_start_error.as_deref() != Some(error.as_str()) {
+                        log(&events, &format!("Waiting to watch: {error}."));
+                    }
+                    last_start_error = Some(error);
+                }
             }
-        } else {
-            match commands.recv() {
-                Ok(command) => Some(command),
-                Err(_) => break,
-            }
+        }
+
+        // Wake every couple of seconds to retry connecting or starting, and to poll the in-game date.
+        let command = match commands.recv_timeout(POLL) {
+            Ok(command) => Some(command),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => break,
         };
 
         if let Some(command) = command {
             match command {
-                Command::Preview(new) => preview(session.as_ref(), &new, &events, &mut last_plan_error),
-                Command::Start(new) => start(session.as_ref(), new, &mut watch, &events),
+                Command::Preview(new) => {
+                    settings = new.clone();
+                    preview(session.as_ref(), &new, &events, &mut last_plan_error);
+                }
+                Command::Settings(new) => {
+                    settings = new.clone();
+                    if let Some(watch) = watch.as_mut() {
+                        watch.settings = new;
+                    }
+                }
             }
         }
 
@@ -177,26 +196,13 @@ fn preview(
     }
 }
 
-fn start(session: Option<&Session>, settings: GrowthSettings, watch: &mut Option<Watch>, events: &Sender<Event>) {
-    let Some(session) = session else {
-        log(events, "Connect to the game first.");
-        return;
-    };
-    if let Err(error) = settings.validate() {
-        log(events, &format!("Settings are not valid: {error}"));
-        return;
-    }
-    let Some(date) = session.game_date() else {
-        log(events, "Cannot read the in-game date.");
-        return;
-    };
-    let Some(loads) = session.loads() else {
-        log(events, "Cannot read the save-load counter.");
-        return;
-    };
+fn start(session: Option<&Session>, settings: GrowthSettings, watch: &mut Option<Watch>) -> Result<FmDate, String> {
+    let session = session.ok_or("not connected")?;
+    settings.validate()?;
+    let date = session.game_date().ok_or("cannot read the in-game date")?;
+    let loads = session.loads().ok_or("cannot read the save-load counter")?;
     *watch = Some(Watch { settings, last_month: Some(GrowthSettings::month_key(date)), loads: Some(loads) });
-    log(events, &format!("Game date {}; watching. The next month will write CA.", date_text(date)));
-    let _ = events.send(Event::Running(true));
+    Ok(date)
 }
 
 /// Checks the in-game date and, on a new month, settles the plan. Returns whether it settled.

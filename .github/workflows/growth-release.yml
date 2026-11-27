@@ -1,0 +1,55 @@
+# Builds the standalone FM27 growth window and attaches it to a GitHub release.
+#
+# Push a tag whose name starts with `growth-v` (for example `growth-v0.1.0`): the workflow builds
+# `fm27-growth-gui.exe`, zips it, and opens a draft release with the zip. A maintainer reviews the draft and
+# publishes it.
+#
+# A run started by hand builds the same zip but keeps it as a workflow artifact only, so it can be downloaded
+# without creating a release.
+#
+# This is separate from release.yml, which builds the Tauri editor from `v*` tags.
+name: Growth GUI Release
+
+on:
+  push:
+    tags: ["growth-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the growth window
+        run: cargo build -p fm27-growth-gui --release
+
+      - name: Package the executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item target/release/fm27-growth-gui.exe out/
+          Compress-Archive -Path out/fm27-growth-gui.exe `
+            -DestinationPath "out/FM27-Growth-GUI-${{ github.ref_name }}.zip"
+          Get-ChildItem out | Format-Table Name, Length
+
+      - name: Keep the zip as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FM27-Growth-GUI-windows
+          path: out/*.zip
+
+      - name: Open a draft release
+        if: startsWith(github.ref, 'refs/tags/growth-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.zip
+          generate_release_notes: true
+          draft: true
