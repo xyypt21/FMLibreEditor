@@ -9,14 +9,16 @@
 | 新 crate | `crates/fm27-growth-gui`：窗口、增长规则、后台线程 |
 | core 新增接口 | `ClubIdentity`、`Session::club_at`、`TeamPlayer`、`team_objects_at`、`linked_team_addresses`、`team_players` |
 | 工作区配置 | 根 `Cargo.toml` 增加 `eframe` 依赖与 `[profile.dev]` |
-| 发布 | 新增 `.github/workflows/growth-release.yml` |
+| 发布 | 新增 `.github/workflows/growth-release.yml`，删除上游的 `ci.yml` 与 `release.yml` |
 | 文档 | `README.md` 重写为简介，详细内容移到 `docs/growth/` |
 | 依赖锁 | `Cargo.lock` 随新依赖更新 |
 
 ## 文件清单
 
 ```text
-.github/workflows/growth-release.yml      +55
+.github/workflows/growth-release.yml      +72
+.github/workflows/ci.yml                  删除
+.github/workflows/release.yml             删除
 Cargo.toml                                 +8
 crates/fm27-growth-gui/Cargo.toml         +16
 crates/fm27-growth-gui/src/growth.rs     +386
@@ -175,7 +177,9 @@ incremental = true
 
 ### `.github/workflows/growth-release.yml`
 
-在 `growth-v*` 标签上构建 Windows exe、打包 zip、创建 draft Release；手动运行只上传 artifact。与上游编辑器发布分开，详见[构建与发布](build.md)。
+仓库唯一的工作流。`growth-v*` 标签或手动运行时依次执行 `fmt`、`clippy`、`test`、release 构建；标签运行还会打包 zip、创建 draft Release，手动运行只上传 artifact。
+
+上游的 `ci.yml` 与 `release.yml` 已删除：这个 fork 只发布 growth 窗口，原先由它们执行的检查移入了本工作流。详见[构建与发布](build.md)。
 
 ### `README.md` 与 `docs/growth/`
 
@@ -190,13 +194,15 @@ README 只保留简介、功能、快速开始和文档入口；规则、使用�
 
 ## 合并上游时
 
-需要留意的只有三处 core 文件和根 `Cargo.toml`：
+需要留意的是三处 core 文件、根 `Cargo.toml`，以及两个被删除的工作流文件：
 
 ```text
 crates/fmlibre-core/src/clubs.rs
 crates/fmlibre-core/src/squad.rs
 crates/fmlibre-core/src/lib.rs
 Cargo.toml
+.github/workflows/ci.yml
+.github/workflows/release.yml
 ```
 
-`fm27-growth-gui` 是独立 crate，`growth-release.yml` 是独立工作流，通常不会与上游冲突。
+删除上游工作流会在合并上游时表现为 modify/delete 冲突，保留删除即可。`fm27-growth-gui` 是独立 crate，`growth-release.yml` 是独立工作流，通常不会与上游冲突。

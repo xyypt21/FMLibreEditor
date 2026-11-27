@@ -42,48 +42,67 @@ cargo test -p fm27-growth-gui
 cargo clippy -p fm27-growth-gui --all-targets -- -D warnings
 ```
 
+## 分支
+
+| 分支 | 用途 |
+| --- | --- |
+| `main` | 主分支：日常开发和 `growth-v*` 发布标签都打在这里 |
+| `upstream` | 上次同步的上游提交，只用于合并上游更新 |
+
+`upstream` 当前指向上游基线 `3cb3566`。同步上游时先更新这个分支，再合并进 `main`：
+
+```powershell
+git fetch upstream
+git checkout upstream
+git reset --hard upstream/main
+git checkout main
+git merge upstream
+```
+
+如果还没有配置上游 remote：
+
+```powershell
+git remote add upstream https://github.com/tozmoz/FMLibreEditor.git
+```
+
 ## 发布
 
-仓库包含独立工作流：
+仓库只有一个工作流：
 
 ```text
 .github/workflows/growth-release.yml
 ```
 
-推送 `growth-v*` 标签即可构建并创建草稿 Release：
+推送 `growth-v*` 标签即可检查、构建并创建草稿 Release：
 
 ```powershell
 git tag growth-v0.1.0
 git push origin growth-v0.1.0
 ```
 
-工作流会：
+工作流会依次：
 
-1. 在 Windows 上构建 `fm27-growth-gui.exe`；
-2. 打包成 zip；
-3. 创建 draft GitHub Release 并附加 zip。
+1. `cargo fmt -p fm27-growth-gui -- --check`
+2. `cargo clippy -p fm27-growth-gui --all-targets -- -D warnings`
+3. `cargo test -p fm27-growth-gui`
+4. `cargo build -p fm27-growth-gui --release`
+5. 打包成 zip；
+6. 上传 artifact；
+7. 创建 draft GitHub Release 并附加 zip。
 
-在 Actions 页面手动运行该工作流时，只会生成 artifact，不会创建 Release。
+在 Actions 页面手动运行该工作流时，同样会做检查和构建，但只保留 artifact，不会创建 Release。
 
 如果创建 Release 时报权限错误，到 **Settings → Actions → General → Workflow permissions** 选择 **Read and write permissions**。
 
-## 为什么不直接复用上游的 CI / Release
+## 为什么只有一个工作流
 
-**CI 可以复用。** 上游 `ci.yml` 执行：
+这个 fork 只发布 growth 窗口，不发布编辑器，所以删除了上游的 `ci.yml` 和 `release.yml`，把它们原本的检查移进了 `growth-release.yml`。
 
-```text
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
+上游 `release.yml` 本来也不能直接用：
 
-`fm27-growth-gui` 是 workspace 成员，格式、clippy 和测试都会被自动检查，不需要额外的 CI 文件。
+- 只由 `v*` 触发，并要求标签等于编辑器版本 `app/src-tauri/tauri.conf.json`；
+- Windows 安装包需要签名私钥 `TAURI_SIGNING_PRIVATE_KEY`，fork 没有该 secret 时标签构建会失败；
+- 发布任务只接受固定文件名，不含 `fm27-growth-gui.exe`；
+- 发布前会等待该提交上的 `ci.yml` 通过。
 
-**Release 不能直接复用。** 上游 `release.yml`：
-
-- 只由 `v*` 触发，并要求标签等于编辑器版本 `app/src-tauri/tauri.conf.json`，本程序无法使用独立版本号；
-- Windows 安装包需要签名私钥 `TAURI_SIGNING_PRIVATE_KEY`，fork 没有该 secret 时标签构建会失败（只有 PR 允许无签名构建）；
-- 发布任务只接受固定文件名，不含 `fm27-growth-gui.exe`，要加入就必须修改上游文件，后续合并上游会产生冲突；
-- 发布前会等待该提交上的 `ci.yml` 通过，而标签提交通常没有跑过 CI。
-
-因此发布保持为独立工作流 `growth-release.yml`，与上游编辑器发布互不影响。
+现在只保留一个工作流：标签触发时先检查再构建，手动触发时只检查和构建，不创建 Release。

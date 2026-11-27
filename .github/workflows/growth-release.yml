@@ -1,13 +1,14 @@
-# Builds the standalone FM27 growth window and attaches it to a GitHub release.
+# Builds the standalone FM27 growth window, checks it, and attaches it to a GitHub release.
 #
-# Push a tag whose name starts with `growth-v` (for example `growth-v0.1.0`): the workflow builds
+# This is the repository's only workflow: the fork ships the growth window rather than the editor, so the editor's
+# ci.yml and release.yml were removed and their checks now run here, before the release build.
+#
+# Push a tag whose name starts with `growth-v` (for example `growth-v0.1.0`): the workflow checks the crate, builds
 # `fm27-growth-gui.exe`, zips it, and opens a draft release with the zip. A maintainer reviews the draft and
 # publishes it.
 #
-# A run started by hand builds the same zip but keeps it as a workflow artifact only, so it can be downloaded
-# without creating a release.
-#
-# This is separate from release.yml, which builds the Tauri editor from `v*` tags.
+# A run started by hand checks and builds the same zip but keeps it as a workflow artifact only, so it can be
+# downloaded without creating a release.
 name: Growth GUI Release
 
 on:
@@ -25,8 +26,19 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt -p fm27-growth-gui -- --check
+
+      - name: Clippy
+        run: cargo clippy -p fm27-growth-gui --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test -p fm27-growth-gui
 
       - name: Build the growth window
         run: cargo build -p fm27-growth-gui --release
