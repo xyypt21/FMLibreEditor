@@ -168,7 +168,7 @@ fn preview(
             })));
         }
         Err(error) => {
-            // The preview repeats every couple of seconds: report a failure only when it changes.
+            // A repeated manual preview must not flood the log with the same failure.
             if last_error.as_deref() != Some(error.as_str()) {
                 let _ = events.send(Event::Plan(Err(error.clone())));
             }
