@@ -21,11 +21,11 @@ mod growth;
 mod worker;
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use eframe::egui;
+use fm27_growth_model::{load_settings, settings_path, update_settings};
 
 use growth::GrowthSettings;
 use worker::{Command, Event, PlanView};
@@ -46,28 +46,6 @@ fn main() -> eframe::Result {
             Ok(Box::new(App::new()))
         }),
     )
-}
-
-/// Where the settings file lives: under `%APPDATA%`, or beside the working directory without it.
-fn settings_path() -> PathBuf {
-    match std::env::var_os("APPDATA") {
-        Some(dir) => PathBuf::from(dir).join("fm27-growth").join("settings.json"),
-        None => PathBuf::from("fm27-growth-settings.json"),
-    }
-}
-
-fn load_settings() -> GrowthSettings {
-    std::fs::read_to_string(settings_path()).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
-}
-
-fn save_settings(settings: &GrowthSettings) {
-    let path = settings_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Ok(text) = serde_json::to_string_pretty(settings) {
-        let _ = std::fs::write(path, text);
-    }
 }
 
 /// Adds a Windows CJK font as a fallback, so Chinese club and player names do not render as boxes.
@@ -93,6 +71,7 @@ struct App {
     sent_settings: GrowthSettings,
     connected: bool,
     running: bool,
+    stopped: bool,
     plan: Option<PlanView>,
     log: VecDeque<String>,
     error: Option<String>,
@@ -110,6 +89,7 @@ impl App {
             sent_settings: GrowthSettings::default(),
             connected: false,
             running: false,
+            stopped: false,
             plan: None,
             log: VecDeque::new(),
             error: None,
@@ -159,6 +139,11 @@ impl App {
                 self.error = Some(error);
             }
             Event::Running(running) => self.running = running,
+            Event::Stopped(message) => {
+                self.running = false;
+                self.stopped = true;
+                self.error = Some(message);
+            }
         }
     }
 
@@ -170,8 +155,15 @@ impl App {
             if ui.button("Growth rules").clicked() {
                 self.show_rules = true;
             }
+            if self.stopped && ui.button("Resume watching").clicked() {
+                self.stopped = false;
+                self.error = None;
+                self.send(Command::Resume);
+            }
             ui.separator();
-            if self.running {
+            if self.stopped {
+                ui.colored_label(egui::Color32::from_rgb(0xb0, 0x00, 0x20), "watcher stopped");
+            } else if self.running {
                 ui.colored_label(egui::Color32::from_rgb(0x1a, 0x7f, 0x37), "watching the in-game month");
             } else if self.connected {
                 ui.label("connected; waiting for a save to watch");
@@ -309,6 +301,11 @@ impl App {
         ui.label("CA and PA must be 1 to 200, and CA must not be above PA.");
         ui.label("A player at his PA does not grow.");
         ui.label("If CA + the monthly gain would pass the cap, that player is skipped; CA is not clamped.");
+        ui.strong("Backward dates");
+        ui.label(
+            "If the in-game date moves backwards without a save load, nothing is written, the error is logged, and the \
+             watcher stops. Resume watching starts it again from the date it finds.",
+        );
         ui.add_space(6.0);
         ui.strong("Editing");
         ui.label(
@@ -360,6 +357,12 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        save_settings(&self.settings);
+        // The squad window shares this file. Save only the fields this window owns, so its formation survives.
+        let settings = &self.settings;
+        update_settings(|saved| {
+            saved.monthly_gain = settings.monthly_gain;
+            saved.max_age = settings.max_age;
+            saved.cap = settings.cap;
+        });
     }
 }

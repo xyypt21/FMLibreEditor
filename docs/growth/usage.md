@@ -50,9 +50,14 @@
 {
   "monthly_gain": 2,
   "max_age": 23,
-  "cap": { "age1": 18, "ratio1": 0.6, "age2": 21, "ratio2": 0.9 }
+  "apa_shortfall_years": 2.0,
+  "aca_growth_years": 0.5,
+  "cap": { "age1": 18, "ratio1": 0.6, "age2": 21, "ratio2": 0.9 },
+  "formation": "GK 1, WBL 1, WBR 1, DC 3, MC 2, AML 1, AMR 1, ST 1"
 }
 ```
+
+增长窗口保存 `monthly_gain`、`max_age` 和 `cap`；阵容窗口保存 `formation`。两个窗口退出时都会先读回最新文件，只改自己的字段，所以同时打开也不会互相覆盖。`apa_shortfall_years` 和 `aca_growth_years` 目前只在设置文件里，供阵容窗口的 ACA/APA 使用。
 
 ## 常见问题
 
@@ -80,3 +85,22 @@
 **构建时报“拒绝访问”**
 
 - 程序正在运行，先关闭 `fm27-growth-gui.exe` 再构建。
+
+## 阵容窗口
+
+`fm27-squad-gui.exe` 是独立的窗口，只读游戏，显示 ACA/APA、阵型缺口和可出售球员。
+
+1. 启动 FM27 并载入存档；
+2. 运行 `fm27-squad-gui.exe`；
+3. 程序自动连接，每 30 秒读取一次；
+4. 顶部编辑 `Formation`，格式为 `GK 1, DC 3, ...`，合计必须 11；
+5. `Pause` 停止自动刷新，`Refresh now` 立即读取；
+6. 关闭窗口时保存阵型。
+
+规则和表格含义见[阵容窗口](squad.md)。
+
+共同点：
+
+- 只读，不写游戏内存；
+- 中文字体回退与增长窗口相同；
+- 与增长窗口共用 `%APPDATA%\fm27-growth\settings.json`。

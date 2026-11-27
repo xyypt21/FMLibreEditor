@@ -1433,12 +1433,30 @@ dependencies = [
 name = "fm27-growth-gui"
 version = "0.5.5"
 dependencies = [
- "chrono",
  "eframe",
+ "fm27-growth-model",
  "fmlibre-core",
  "fmlibre-mem",
+]
+
+[[package]]
+name = "fm27-growth-model"
+version = "0.5.5"
+dependencies = [
+ "chrono",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "fm27-squad-gui"
+version = "0.5.5"
+dependencies = [
+ "chrono",
+ "eframe",
+ "fm27-growth-model",
+ "fmlibre-core",
+ "fmlibre-mem",
 ]
 
 [[package]]

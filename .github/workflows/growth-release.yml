@@ -1,15 +1,15 @@
-# Builds the standalone FM27 growth window, checks it, and attaches it to a GitHub release.
+# Builds the standalone FM27 growth and squad windows, checks them, and attaches them to a GitHub release.
 #
-# This is the repository's only workflow: the fork ships the growth window rather than the editor, so the editor's
+# This is the repository's only workflow: the fork ships these tools rather than the editor, so the editor's
 # ci.yml and release.yml were removed and their checks now run here, before the release build.
 #
-# Push a tag whose name starts with `growth-v` (for example `growth-v0.1.0`): the workflow checks the crate, builds
-# `fm27-growth-gui.exe`, zips it, and opens a draft release with the zip. A maintainer reviews the draft and
-# publishes it.
+# Push a tag whose name starts with `growth-v` (for example `growth-v0.2.0`): the workflow checks the crates, builds
+# `fm27-growth-gui.exe` and `fm27-squad-gui.exe`, zips them, and opens a draft release with the zip. A maintainer
+# reviews the draft and publishes it.
 #
 # A run started by hand checks and builds the same zip but keeps it as a workflow artifact only, so it can be
 # downloaded without creating a release.
-name: Growth GUI Release
+name: FM27 Tools Release
 
 on:
   push:
@@ -32,30 +32,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Formatting
-        run: cargo fmt -p fm27-growth-gui -- --check
+        run: cargo fmt -p fm27-growth-model -p fm27-growth-gui -p fm27-squad-gui -- --check
 
       - name: Clippy
-        run: cargo clippy -p fm27-growth-gui --all-targets -- -D warnings
+        run: cargo clippy -p fm27-growth-model -p fm27-growth-gui -p fm27-squad-gui --all-targets -- -D warnings
 
       - name: Tests
-        run: cargo test -p fm27-growth-gui
+        run: cargo test -p fm27-growth-model -p fm27-growth-gui -p fm27-squad-gui
 
-      - name: Build the growth window
-        run: cargo build -p fm27-growth-gui --release
+      - name: Build the windows
+        run: cargo build -p fm27-growth-gui -p fm27-squad-gui --release
 
-      - name: Package the executable
+      - name: Package the executables
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item target/release/fm27-growth-gui.exe out/
-          Compress-Archive -Path out/fm27-growth-gui.exe `
-            -DestinationPath "out/FM27-Growth-GUI-${{ github.ref_name }}.zip"
+          Copy-Item target/release/fm27-squad-gui.exe out/
+          Compress-Archive -Path out/fm27-growth-gui.exe, out/fm27-squad-gui.exe `
+            -DestinationPath "out/FM27-Tools-${{ github.ref_name }}.zip"
           Get-ChildItem out | Format-Table Name, Length
 
       - name: Keep the zip as an artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FM27-Growth-GUI-windows
+          name: FM27-Tools-windows
           path: out/*.zip
 
       - name: Open a draft release

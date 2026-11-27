@@ -5,9 +5,13 @@ use serde::Serialize;
 
 use crate::calibrate::ArrayRef;
 use crate::index::{Listed, SearchIndex};
+use crate::locate::Manager;
 use crate::profile::{ClubFinanceLayout, Layout, StadiumLayout};
 use crate::session::Session;
 use crate::text::{fold, is_name_like, read_fm_string};
+
+/// The most human managers a save may list; beyond this the training manager is not one the editor understands.
+const MOST_MANAGERS: u64 = 64;
 
 /// Supporter-mix percentages in the order FM stores them, as the game's Supporter Profile names them.
 pub const SUPPORTER_MIX: [&str; 6] = ["hardcore", "core", "family", "fair_weather", "corporate", "casual"];
@@ -85,6 +89,50 @@ impl Session {
         let uid = self.process.read_u32(address + c.uid).ok().filter(|&uid| uid != 0)?;
         let name = read_fm_string(&self.process, self.process.read_u64(address + c.name).ok()?)?;
         is_name_like(&name).then_some(ClubIdentity { uid, name, address })
+    }
+
+    /// The clubs the human managers run, from the training manager's list: one object per human manager, each naming
+    /// his club at [`crate::FamiliarityLayout::club`](crate::profile::FamiliarityLayout). Only clubs that list teams of
+    /// their own are kept. Only reads memory.
+    pub fn human_clubs(&self) -> Result<Vec<ClubIdentity>, String> {
+        let familiarity = self.layout.familiarity.as_ref().ok_or("this build does not place the training manager")?;
+        let place = self.manager_place(Manager::Training).ok_or("the training manager was not found")?;
+        let process = &self.process;
+        let root = process.read_u64(self.plugin.base + place.rva).map_err(|error| error.to_string())?;
+        if !is_user_pointer(root) {
+            return Err("the training manager's pointer is not one the editor understands".to_owned());
+        }
+        let first = process.read_u64(root + familiarity.managers).map_err(|error| error.to_string())?;
+        let last = process.read_u64(root + familiarity.managers + 8).map_err(|error| error.to_string())?;
+        if !is_user_pointer(first) || last < first || last - first > 8 * MOST_MANAGERS {
+            return Err("the training manager's list of managers is not one the editor understands".to_owned());
+        }
+        let mut clubs: Vec<ClubIdentity> = Vec::new();
+        for at in (first..last).step_by(8) {
+            let Ok(keeper) = process.read_u64(at) else {
+                continue;
+            };
+            if !is_user_pointer(keeper) {
+                continue;
+            }
+            let Ok(address) = process.read_u64(keeper + familiarity.club) else {
+                continue;
+            };
+            let Some(club) = self.club_at(address) else {
+                continue;
+            };
+            if clubs.iter().any(|seen| seen.address == club.address) {
+                continue;
+            }
+            // A club lists teams of its own: the ones the callers will walk.
+            if self.team_objects_at(club.address, club.uid).is_ok_and(|teams| !teams.is_empty()) {
+                clubs.push(club);
+            }
+        }
+        if clubs.is_empty() && first != last {
+            return Err("the training manager's clubs are not ones the editor understands".to_owned());
+        }
+        Ok(clubs)
     }
 }
 

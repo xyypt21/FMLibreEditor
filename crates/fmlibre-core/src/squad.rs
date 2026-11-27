@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::clubs::{ClubIndex, ClubSummary};
 use crate::date::FmDate;
-use crate::players::{PlayerIndex, PlayerSummary};
+use crate::details::POSITIONS;
+use crate::players::{PlayerIndex, PlayerSummary, natural_positions};
 use crate::profile::TeamLayout;
 use crate::session::Session;
 use crate::text::{display_name, read_fm_string, read_name_entry};
@@ -56,6 +57,14 @@ pub struct TeamPlayer {
     pub date_of_birth: Option<FmDate>,
     pub current_ability: u16,
     pub potential_ability: i16,
+    /// The positions he can play (rated at least [`crate::PLAYABLE_RATING`]), best first, as [`crate::POSITIONS`] keys.
+    pub positions: Vec<&'static str>,
+    /// The team he plays for now, when its pointer is readable; used to tell a player on loan at another club.
+    #[serde(skip)]
+    pub team: Option<u64>,
+    /// The team his contract ties him to, when its pointer is readable; the employer of a player on loan here.
+    #[serde(skip)]
+    pub employer_team: Option<u64>,
     #[serde(skip)]
     pub address: u64,
     /// How far this object's person block is shifted (see [`crate::PlayerLayout::person_block_shifts`]).
@@ -290,6 +299,20 @@ impl Session {
         let u16_at =
             |offset: u64| process.read_bytes(at(offset), 2).ok().map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
         let u64_at = |offset: u64| process.read_u64(at(offset)).unwrap_or(0);
+        let positions = process
+            .read_bytes(at(p.positions), POSITIONS.len())
+            .ok()
+            .map(|bytes| {
+                let mut ratings = [0u8; POSITIONS.len()];
+                ratings.copy_from_slice(&bytes);
+                natural_positions(&ratings)
+            })
+            .unwrap_or_default();
+        let team = Some(u64_at(p.team)).filter(|&team| is_user_pointer(team));
+        let contract = Some(u64_at(p.contract)).filter(|&contract| is_user_pointer(contract));
+        let employer_team = contract
+            .and_then(|contract| process.read_u64(contract + self.layout.contract.team).ok())
+            .filter(|&team| is_user_pointer(team));
         let full_name = read_fm_string(process, u64_at(p.full_name));
         let (common, first, last) = (
             read_name_entry(process, u64_at(p.common_name)),
@@ -302,6 +325,9 @@ impl Session {
             date_of_birth: FmDate::from_raw(u16_at(p.date_of_birth)?, u16_at(p.date_of_birth + 2)?),
             current_ability: u16_at(p.current_ability)?,
             potential_ability: u16_at(p.potential_ability)? as i16,
+            positions,
+            team,
+            employer_team,
             address: object,
             shift,
         })

@@ -12,6 +12,7 @@ authors = ["FMLibreEditor contributors"]
 [workspace.dependencies]
 fmlibre-mem = { path = "crates/fmlibre-mem" }
 fmlibre-core = { path = "crates/fmlibre-core" }
+fm27-growth-model = { path = "crates/fm27-growth-model" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

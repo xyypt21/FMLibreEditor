@@ -10,18 +10,20 @@
 
 ```powershell
 cargo run -p fm27-growth-gui
+cargo run -p fm27-squad-gui
 ```
 
 ## Release 构建
 
 ```powershell
-cargo build -p fm27-growth-gui --release
+cargo build -p fm27-growth-gui -p fm27-squad-gui --release
 ```
 
 生成：
 
 ```text
 target\release\fm27-growth-gui.exe
+target\release\fm27-squad-gui.exe
 ```
 
 体积相关配置：
@@ -37,9 +39,9 @@ target\release\fm27-growth-gui.exe
 ## 检查
 
 ```powershell
-cargo fmt -p fm27-growth-gui
-cargo test -p fm27-growth-gui
-cargo clippy -p fm27-growth-gui --all-targets -- -D warnings
+cargo fmt -p fm27-growth-model -p fm27-growth-gui -p fm27-squad-gui
+cargo test -p fm27-growth-model -p fm27-growth-gui -p fm27-squad-gui
+cargo clippy -p fm27-growth-model -p fm27-growth-gui -p fm27-squad-gui --all-targets -- -D warnings
 ```
 
 ## 分支
@@ -82,11 +84,11 @@ git push origin growth-v0.1.0
 
 工作流会依次：
 
-1. `cargo fmt -p fm27-growth-gui -- --check`
-2. `cargo clippy -p fm27-growth-gui --all-targets -- -D warnings`
-3. `cargo test -p fm27-growth-gui`
-4. `cargo build -p fm27-growth-gui --release`
-5. 打包成 zip；
+1. `cargo fmt -p fm27-growth-model -p fm27-growth-gui -p fm27-squad-gui -- --check`
+2. `cargo clippy -p fm27-growth-model -p fm27-growth-gui -p fm27-squad-gui --all-targets -- -D warnings`
+3. `cargo test -p fm27-growth-model -p fm27-growth-gui -p fm27-squad-gui`
+4. `cargo build -p fm27-growth-gui -p fm27-squad-gui --release`
+5. 把两个 exe 打包成 `FM27-Tools-<tag>.zip`；
 6. 上传 artifact；
 7. 创建 draft GitHub Release 并附加 zip。
 

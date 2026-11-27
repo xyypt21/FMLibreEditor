@@ -1,0 +1,15 @@
+[package]
+name = "fm27-squad-gui"
+description = "Standalone window for FM27 squad depth, ACA/APA and sell candidates, reading the game through fmlibre-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+eframe.workspace = true
+fmlibre-core.workspace = true
+fmlibre-mem.workspace = true
+fm27-growth-model.workspace = true
